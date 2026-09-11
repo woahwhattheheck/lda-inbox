@@ -6,7 +6,10 @@
       "created": "2026-09-11T02:46:57+00:00",
       "kind": "run_task",
       "command": "delegation smoke test \u2014 reply with the current time",
-      "timeout_s": 120
+      "timeout_s": 120,
+      "done": true,
+      "completed_at": "2026-09-11T02:47:10+00:00",
+      "result": "smoke test task retired before phone pickup"
     }
   ]
 }
