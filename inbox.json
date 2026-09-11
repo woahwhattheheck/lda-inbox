@@ -16,7 +16,10 @@
       "created": "2026-09-11T03:14:21+00:00",
       "kind": "run_task",
       "command": "End-to-end delegation test: reply with the current time and the phone's current battery level.",
-      "timeout_s": 300
+      "timeout_s": 300,
+      "done": true,
+      "completed_at": "2026-09-11T03:16:27+00:00",
+      "result": "retired \u2014 delegation architecture removed per user request"
     }
   ]
 }
