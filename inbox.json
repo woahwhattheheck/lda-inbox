@@ -1,4 +1,12 @@
 {
   "v": 1,
-  "tasks": []
+  "tasks": [
+    {
+      "id": "t-20260911-024657-65fd",
+      "created": "2026-09-11T02:46:57+00:00",
+      "kind": "run_task",
+      "command": "delegation smoke test \u2014 reply with the current time",
+      "timeout_s": 120
+    }
+  ]
 }
