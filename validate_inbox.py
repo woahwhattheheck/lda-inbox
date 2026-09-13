@@ -32,23 +32,32 @@ def _reject_non_json_constant(token: str) -> Any:
     raise InboxValidationError(f"invalid JSON constant: {token}")
 
 
-def _validate_json_domain(value: Any, where: str = "root") -> None:
-    if isinstance(value, str):
-        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
-            raise InboxValidationError(f"{where}: unpaired Unicode surrogate is not allowed")
-        return
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise InboxValidationError(f"{where}: non-finite JSON number is not allowed")
-        return
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            _validate_json_domain(item, f"{where}[{index}]")
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _validate_json_domain(key, f"{where} key")
-            _validate_json_domain(item, f"{where}.{key}")
+def _validate_json_domain(value: Any) -> None:
+    stack: list[tuple[str, Any]] = [("root", value)]
+    while stack:
+        where, current = stack.pop()
+        if isinstance(current, str):
+            if any(0xD800 <= ord(character) <= 0xDFFF for character in current):
+                raise InboxValidationError(
+                    f"{where}: unpaired Unicode surrogate is not allowed"
+                )
+            continue
+        if isinstance(current, float):
+            if not math.isfinite(current):
+                raise InboxValidationError(
+                    f"{where}: non-finite JSON number is not allowed"
+                )
+            continue
+        if isinstance(current, list):
+            stack.extend(
+                (f"{where}[{index}]", item)
+                for index, item in reversed(list(enumerate(current)))
+            )
+            continue
+        if isinstance(current, dict):
+            for key, item in reversed(list(current.items())):
+                stack.append((f"{where}.{key}", item))
+                stack.append((f"{where} key", key))
 
 
 def _require(mapping: dict[str, Any], key: str, where: str) -> Any:
@@ -139,6 +148,10 @@ def validate_text(text: str) -> dict[str, Any]:
         raise InboxValidationError(
             f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from exc
+    except ValueError as exc:
+        raise InboxValidationError(f"invalid JSON number: {exc}") from exc
+    except RecursionError as exc:
+        raise InboxValidationError("JSON nesting exceeds the supported depth") from exc
 
     _validate_json_domain(document)
     if not isinstance(document, dict):
