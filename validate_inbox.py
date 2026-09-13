@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,25 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_non_json_constant(token: str) -> Any:
     raise InboxValidationError(f"invalid JSON constant: {token}")
+
+
+def _validate_json_domain(value: Any, where: str = "root") -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise InboxValidationError(f"{where}: unpaired Unicode surrogate is not allowed")
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise InboxValidationError(f"{where}: non-finite JSON number is not allowed")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_json_domain(item, f"{where}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_json_domain(key, f"{where} key")
+            _validate_json_domain(item, f"{where}.{key}")
 
 
 def _require(mapping: dict[str, Any], key: str, where: str) -> Any:
@@ -120,6 +140,7 @@ def validate_text(text: str) -> dict[str, Any]:
             f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from exc
 
+    _validate_json_domain(document)
     if not isinstance(document, dict):
         raise InboxValidationError("root: expected a JSON object")
 
