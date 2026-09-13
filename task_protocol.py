@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Lease/CAS state machine for the repository-backed LocalDeviceAgent inbox.
+"""Generation-bound lease/CAS coordination for the repository-backed phone inbox.
 
-This module is additive to validate_inbox.py.  The base validator continues to
-own the v1 task envelope; this module validates and transitions the optional
-per-task ``execution`` extension used to prevent duplicate execution across
-poll/retry/reassignment cycles.
+The protocol never executes a task or publishes a repository update. Mutating
+commands only stage the next JSON document. The publisher must still compare
+and swap the exact repository ref/blob, re-read the published state, and only
+then execute work.
 
-Mutating CLI commands never overwrite the input file.  They require the caller
-to provide the current semantic document SHA-256 and emit the next JSON
-snapshot on stdout.  Publishing that snapshot remains a separate Git/ref-CAS
-operation so a stale worker cannot clobber a concurrently published state.
+Lease authority is the tuple (worker_id, lease_id, attempt). ``lease_id`` is a
+correlation identifier, not a globally unique capability: it may recur in a
+later generation, but every renew/release/complete request must bind the exact
+attempt number of the currently published lease.
 """
 
 from __future__ import annotations
@@ -69,8 +69,7 @@ def _require_id(value: Any, field: str) -> str:
         raise TaskProtocolError(f"{field}: expected a non-empty trimmed identifier")
     if _utf8_bytes(value) > MAX_ID_BYTES or ID_RE.fullmatch(value) is None:
         raise TaskProtocolError(
-            f"{field}: expected <= {MAX_ID_BYTES} UTF-8 bytes using "
-            "canonical ASCII identifier syntax"
+            f"{field}: expected <= {MAX_ID_BYTES} UTF-8 bytes using canonical ASCII identifier syntax"
         )
     return value
 
@@ -102,25 +101,19 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def canonical_document_text(document: dict[str, Any]) -> str:
-    """Return deterministic human-readable JSON for a validated document."""
     validate_protocol_document(document)
-    return json.dumps(
-        document,
-        ensure_ascii=False,
-        sort_keys=True,
-        indent=2,
-        allow_nan=False,
-    ) + "\n"
+    return (
+        json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+        + "\n"
+    )
 
 
 def document_sha256(document: dict[str, Any]) -> str:
-    """Digest semantic JSON content, independent of whitespace/key order."""
     validate_protocol_document(document)
     return hashlib.sha256(_canonical_json_bytes(document)).hexdigest()
 
 
 def task_spec_sha256(task: dict[str, Any]) -> str:
-    """Bind execution authority to all immutable/additive task specification fields."""
     spec = {key: value for key, value in task.items() if key not in MUTABLE_TASK_FIELDS}
     return hashlib.sha256(_canonical_json_bytes(spec)).hexdigest()
 
@@ -137,12 +130,12 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
     if not isinstance(execution, dict):
         raise TaskProtocolError(f"{where}: expected a JSON object")
 
-    version = _require_exact_int(
-        execution.get("v"), f"{where}.v", minimum=PROTOCOL_VERSION, maximum=PROTOCOL_VERSION
+    _require_exact_int(
+        execution.get("v"), f"{where}.v",
+        minimum=PROTOCOL_VERSION, maximum=PROTOCOL_VERSION,
     )
-    assert version == PROTOCOL_VERSION
     state = execution.get("state")
-    if not isinstance(state, str) or state not in EXECUTION_STATES:
+    if state not in EXECUTION_STATES:
         raise TaskProtocolError(
             f"{where}.state: expected one of {', '.join(sorted(EXECUTION_STATES))}"
         )
@@ -170,25 +163,18 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
     lease_span_s = (expires - claimed).total_seconds()
     if lease_span_s > MAX_LEASE_S:
         raise TaskProtocolError(
-            f"{where}.lease_expires_at: lease exceeds {MAX_LEASE_S} seconds"
+            f"{where}.lease_expires_at: total authority exceeds {MAX_LEASE_S} seconds"
         )
     if lease_span_s > task["timeout_s"]:
         raise TaskProtocolError(
-            f"{where}.lease_expires_at: lease exceeds task timeout_s {task['timeout_s']}"
+            f"{where}.lease_expires_at: total authority exceeds task timeout_s {task['timeout_s']}"
         )
 
-    done = task.get("done")
-    completion_fields = {"completion_id", "result_sha256"}
     common_fields = {
-        "v",
-        "state",
-        "attempt",
-        "worker_id",
-        "lease_id",
-        "task_sha256",
-        "claimed_at",
-        "lease_expires_at",
+        "v", "state", "attempt", "worker_id", "lease_id",
+        "task_sha256", "claimed_at", "lease_expires_at",
     }
+    completion_fields = {"completion_id", "result_sha256"}
     allowed_fields = set(common_fields)
     if state == "available":
         allowed_fields.add("released_at")
@@ -196,12 +182,11 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
             allowed_fields.add("release_reason")
     elif state == "completed":
         allowed_fields.update(completion_fields)
-    unknown_fields = sorted(set(execution) - allowed_fields)
-    if unknown_fields:
-        raise TaskProtocolError(
-            f"{where}: unknown fields are not allowed: {unknown_fields}"
-        )
+    unknown = sorted(set(execution) - allowed_fields)
+    if unknown:
+        raise TaskProtocolError(f"{where}: unknown fields are not allowed: {unknown}")
 
+    done = task.get("done")
     if state == "leased":
         if done is not False:
             raise TaskProtocolError(f"{where}: leased task must have done=false")
@@ -238,26 +223,20 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
     result = task.get("result")
     if not isinstance(result, str):
         raise TaskProtocolError(f"{where}: completed task requires string result")
-    expected_result_digest = _result_sha256(result)
-    actual_result_digest = _require_sha256(
-        execution.get("result_sha256"), f"{where}.result_sha256"
-    )
-    if actual_result_digest != expected_result_digest:
+    if _require_sha256(execution.get("result_sha256"), f"{where}.result_sha256") != _result_sha256(result):
         raise TaskProtocolError(f"{where}.result_sha256: does not bind the task result")
     completed = _parse_timestamp(task.get("completed_at"), f"tasks[{index}].completed_at")
     if completed < claimed:
         raise TaskProtocolError(f"tasks[{index}].completed_at: precedes claim")
     if completed >= expires:
         raise TaskProtocolError(
-            f"tasks[{index}].completed_at: completion occurred after lease expiry"
+            f"tasks[{index}].completed_at: completion occurred at/after lease expiry"
         )
 
 
 def validate_protocol_document(document: dict[str, Any]) -> dict[str, Any]:
-    """Validate the base v1 envelope plus optional execution protocol fields."""
     if not isinstance(document, dict):
         raise TaskProtocolError("root: expected a JSON object")
-    # Reuse the repository's canonical base validator on the same semantics.
     try:
         base_text = json.dumps(document, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError, RecursionError) as exc:
@@ -316,17 +295,40 @@ def _check_expected(document: dict[str, Any], expected_document_sha256: str) -> 
 
 def _require_lease_seconds(task: dict[str, Any], lease_seconds: Any) -> int:
     seconds = _require_exact_int(
-        lease_seconds,
-        "lease_seconds",
-        minimum=1,
-        maximum=MAX_LEASE_S,
+        lease_seconds, "lease_seconds", minimum=1, maximum=MAX_LEASE_S
     )
-    timeout_s = task["timeout_s"]
-    if seconds > timeout_s:
+    if seconds > task["timeout_s"]:
         raise TaskProtocolError(
-            f"lease_seconds: {seconds} exceeds task timeout_s {timeout_s}"
+            f"lease_seconds: {seconds} exceeds task timeout_s {task['timeout_s']}"
         )
     return seconds
+
+
+def _require_generation(execution: dict[str, Any], expected_attempt: Any) -> int:
+    expected = _require_exact_int(
+        expected_attempt, "expected_attempt", minimum=1, maximum=MAX_ATTEMPT
+    )
+    current = execution["attempt"]
+    if current != expected:
+        raise TaskProtocolError(
+            f"lease generation mismatch: expected attempt {expected}, current {current}"
+        )
+    return current
+
+
+def _require_owner(
+    execution: dict[str, Any],
+    *,
+    worker_id: str,
+    lease_id: str,
+    expected_attempt: Any,
+) -> int:
+    attempt = _require_generation(execution, expected_attempt)
+    if execution["worker_id"] != worker_id or execution["lease_id"] != lease_id:
+        raise TaskProtocolError(
+            "worker_id/lease_id do not own the expected lease generation"
+        )
+    return attempt
 
 
 def _receipt(
@@ -335,6 +337,7 @@ def _receipt(
     task_id: str,
     worker_id: str,
     lease_id: str,
+    attempt: int,
     at: str,
     before_sha256: str,
     after_sha256: str,
@@ -347,6 +350,7 @@ def _receipt(
         "task_id": task_id,
         "worker_id": worker_id,
         "lease_id": lease_id,
+        "attempt": attempt,
         "at": at,
         "before_sha256": before_sha256,
         "after_sha256": after_sha256,
@@ -387,35 +391,36 @@ def claim_task(
         if state == "leased":
             claimed = _parse_timestamp(execution["claimed_at"], "claimed_at")
             expires = _parse_timestamp(execution["lease_expires_at"], "lease_expires_at")
-            if execution["worker_id"] == worker and execution["lease_id"] == lease:
+            if (
+                execution["worker_id"] == worker
+                and execution["lease_id"] == lease
+                and instant < expires
+            ):
                 if instant < claimed:
-                    raise TaskProtocolError("claim replay time precedes the original claim")
-                if instant < expires:
-                    return next_document, _receipt(
-                        action="claim",
-                        task_id=task_id,
-                        worker_id=worker,
-                        lease_id=lease,
-                        at=instant_text,
-                        before_sha256=before,
-                        after_sha256=before,
-                        changed=False,
-                        replayed=True,
+                    raise TaskProtocolError(
+                        "claim replay time precedes the original claim"
                     )
-                raise TaskProtocolError(
-                    "expired lease identity cannot be replayed; use a new lease_id"
+                return next_document, _receipt(
+                    action="claim",
+                    task_id=task_id,
+                    worker_id=worker,
+                    lease_id=lease,
+                    attempt=attempt,
+                    at=instant_text,
+                    before_sha256=before,
+                    after_sha256=before,
+                    changed=False,
+                    replayed=True,
                 )
             if instant < expires:
                 raise TaskProtocolError(
-                    f"task {task_id!r} is actively leased to another worker"
+                    f"task {task_id!r} is actively leased to another authority"
                 )
             attempt += 1
         elif state == "available":
             released = _parse_timestamp(execution["released_at"], "released_at")
             if instant < released:
                 raise TaskProtocolError("claim time precedes the prior release")
-            if execution["lease_id"] == lease:
-                raise TaskProtocolError("released lease_id cannot be reused")
             attempt += 1
         else:
             raise TaskProtocolError(f"task {task_id!r} is already completed")
@@ -440,6 +445,7 @@ def claim_task(
         task_id=task_id,
         worker_id=worker,
         lease_id=lease,
+        attempt=attempt,
         at=instant_text,
         before_sha256=before,
         after_sha256=after,
@@ -454,6 +460,7 @@ def renew_task(
     task_id: str,
     worker_id: str,
     lease_id: str,
+    expected_attempt: int,
     now: str,
     lease_seconds: int,
     expected_document_sha256: str,
@@ -469,26 +476,22 @@ def renew_task(
     execution = task.get("execution")
     if not isinstance(execution, dict) or execution.get("state") != "leased":
         raise TaskProtocolError(f"task {task_id!r} has no active lease")
-    if execution["worker_id"] != worker or execution["lease_id"] != lease:
-        raise TaskProtocolError("worker_id/lease_id do not own the active lease")
+    attempt = _require_owner(
+        execution, worker_id=worker, lease_id=lease, expected_attempt=expected_attempt
+    )
     claimed = _parse_timestamp(execution["claimed_at"], "claimed_at")
     current_expiry = _parse_timestamp(execution["lease_expires_at"], "lease_expires_at")
     if instant < claimed:
         raise TaskProtocolError("renewal time precedes the active claim")
     if instant >= current_expiry:
         raise TaskProtocolError("active lease has expired and cannot be renewed")
+
     new_expiry = instant + timedelta(seconds=seconds)
     if new_expiry == current_expiry:
         return next_document, _receipt(
-            action="renew",
-            task_id=task_id,
-            worker_id=worker,
-            lease_id=lease,
-            at=instant_text,
-            before_sha256=before,
-            after_sha256=before,
-            changed=False,
-            replayed=True,
+            action="renew", task_id=task_id, worker_id=worker, lease_id=lease,
+            attempt=attempt, at=instant_text, before_sha256=before,
+            after_sha256=before, changed=False, replayed=True,
         )
     if new_expiry < current_expiry:
         raise TaskProtocolError("renewal must not shorten the current lease expiry")
@@ -496,15 +499,9 @@ def renew_task(
     validate_protocol_document(next_document)
     after = document_sha256(next_document)
     return next_document, _receipt(
-        action="renew",
-        task_id=task_id,
-        worker_id=worker,
-        lease_id=lease,
-        at=instant_text,
-        before_sha256=before,
-        after_sha256=after,
-        changed=True,
-        replayed=False,
+        action="renew", task_id=task_id, worker_id=worker, lease_id=lease,
+        attempt=attempt, at=instant_text, before_sha256=before,
+        after_sha256=after, changed=True, replayed=False,
     )
 
 
@@ -514,6 +511,7 @@ def release_task(
     task_id: str,
     worker_id: str,
     lease_id: str,
+    expected_attempt: int,
     now: str,
     expected_document_sha256: str,
     reason: str | None = None,
@@ -536,27 +534,32 @@ def release_task(
     execution = task.get("execution")
     if not isinstance(execution, dict):
         raise TaskProtocolError(f"task {task_id!r} has no lease to release")
-    if execution["worker_id"] != worker or execution["lease_id"] != lease:
-        raise TaskProtocolError("worker_id/lease_id do not own the lease")
+    attempt = _require_owner(
+        execution, worker_id=worker, lease_id=lease, expected_attempt=expected_attempt
+    )
+
     if execution["state"] == "available":
         released = _parse_timestamp(execution["released_at"], "released_at")
         if instant < released:
-            raise TaskProtocolError("release replay time precedes the original release")
+            raise TaskProtocolError(
+                "release replay time precedes the original release"
+            )
         if execution.get("release_reason") == reason:
             return next_document, _receipt(
-                action="release",
-                task_id=task_id,
-                worker_id=worker,
-                lease_id=lease,
-                at=instant_text,
-                before_sha256=before,
-                after_sha256=before,
-                changed=False,
-                replayed=True,
+                action="release", task_id=task_id, worker_id=worker, lease_id=lease,
+                attempt=attempt, at=instant_text, before_sha256=before,
+                after_sha256=before, changed=False, replayed=True,
             )
         raise TaskProtocolError("released lease replay changed the release reason")
+
     if execution["state"] != "leased":
         raise TaskProtocolError(f"task {task_id!r} is already completed")
+    claimed = _parse_timestamp(execution["claimed_at"], "claimed_at")
+    expiry = _parse_timestamp(execution["lease_expires_at"], "lease_expires_at")
+    if instant < claimed:
+        raise TaskProtocolError("release time precedes the active claim")
+    if instant >= expiry:
+        raise TaskProtocolError("lease expired before release")
 
     execution["state"] = "available"
     execution["released_at"] = instant_text
@@ -565,15 +568,9 @@ def release_task(
     validate_protocol_document(next_document)
     after = document_sha256(next_document)
     return next_document, _receipt(
-        action="release",
-        task_id=task_id,
-        worker_id=worker,
-        lease_id=lease,
-        at=instant_text,
-        before_sha256=before,
-        after_sha256=after,
-        changed=True,
-        replayed=False,
+        action="release", task_id=task_id, worker_id=worker, lease_id=lease,
+        attempt=attempt, at=instant_text, before_sha256=before,
+        after_sha256=after, changed=True, replayed=False,
     )
 
 
@@ -583,6 +580,7 @@ def complete_task(
     task_id: str,
     worker_id: str,
     lease_id: str,
+    expected_attempt: int,
     completion_id: str,
     result: str,
     now: str,
@@ -601,11 +599,13 @@ def complete_task(
 
     execution = task.get("execution")
     if task["done"]:
+        if not isinstance(execution, dict):
+            raise TaskProtocolError("completed task has no execution receipt")
+        attempt = _require_owner(
+            execution, worker_id=worker, lease_id=lease, expected_attempt=expected_attempt
+        )
         if (
-            isinstance(execution, dict)
-            and execution.get("state") == "completed"
-            and execution.get("worker_id") == worker
-            and execution.get("lease_id") == lease
+            execution.get("state") == "completed"
             and execution.get("completion_id") == completion
             and task.get("result") == result
         ):
@@ -615,23 +615,23 @@ def complete_task(
                     "completion replay time precedes the original completion"
                 )
             return next_document, _receipt(
-                action="complete",
-                task_id=task_id,
-                worker_id=worker,
-                lease_id=lease,
-                at=instant_text,
-                before_sha256=before,
-                after_sha256=before,
-                changed=False,
-                replayed=True,
+                action="complete", task_id=task_id, worker_id=worker, lease_id=lease,
+                attempt=attempt, at=instant_text, before_sha256=before,
+                after_sha256=before, changed=False, replayed=True,
             )
-        raise TaskProtocolError("completed task replay does not exactly match prior completion")
+        raise TaskProtocolError(
+            "completed task replay does not exactly match prior completion"
+        )
 
     if not isinstance(execution, dict) or execution.get("state") != "leased":
         raise TaskProtocolError(f"task {task_id!r} has no active lease")
-    if execution["worker_id"] != worker or execution["lease_id"] != lease:
-        raise TaskProtocolError("worker_id/lease_id do not own the active lease")
+    attempt = _require_owner(
+        execution, worker_id=worker, lease_id=lease, expected_attempt=expected_attempt
+    )
+    claimed = _parse_timestamp(execution["claimed_at"], "claimed_at")
     expiry = _parse_timestamp(execution["lease_expires_at"], "lease_expires_at")
+    if instant < claimed:
+        raise TaskProtocolError("completion time precedes the active claim")
     if instant >= expiry:
         raise TaskProtocolError("lease expired before completion")
 
@@ -644,15 +644,9 @@ def complete_task(
     validate_protocol_document(next_document)
     after = document_sha256(next_document)
     return next_document, _receipt(
-        action="complete",
-        task_id=task_id,
-        worker_id=worker,
-        lease_id=lease,
-        at=instant_text,
-        before_sha256=before,
-        after_sha256=after,
-        changed=True,
-        replayed=False,
+        action="complete", task_id=task_id, worker_id=worker, lease_id=lease,
+        attempt=attempt, at=instant_text, before_sha256=before,
+        after_sha256=after, changed=True, replayed=False,
     )
 
 
@@ -670,7 +664,16 @@ def _add_common_transition_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--expected-document-sha256",
         required=True,
-        help="semantic digest printed by the digest command for the exact input snapshot",
+        help="semantic digest printed by digest for the exact input snapshot",
+    )
+
+
+def _add_generation_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--expected-attempt",
+        required=True,
+        type=int,
+        help="exact published lease generation/attempt being authorized",
     )
 
 
@@ -688,16 +691,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_common_transition_args(claim_parser)
     claim_parser.add_argument("--lease-seconds", required=True, type=int)
 
-    renew_parser = sub.add_parser("renew", help="extend an active lease")
+    renew_parser = sub.add_parser("renew", help="extend an active lease generation")
     _add_common_transition_args(renew_parser)
+    _add_generation_arg(renew_parser)
     renew_parser.add_argument("--lease-seconds", required=True, type=int)
 
-    release_parser = sub.add_parser("release", help="release an owned lease")
+    release_parser = sub.add_parser("release", help="release an owned lease generation")
     _add_common_transition_args(release_parser)
+    _add_generation_arg(release_parser)
     release_parser.add_argument("--reason")
 
-    complete_parser = sub.add_parser("complete", help="complete an owned active lease")
+    complete_parser = sub.add_parser("complete", help="complete an owned active lease generation")
     _add_common_transition_args(complete_parser)
+    _add_generation_arg(complete_parser)
     complete_parser.add_argument("--completion-id", required=True)
     complete_parser.add_argument("--result", required=True)
 
@@ -720,30 +726,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if args.command == "claim":
             next_document, receipt = claim_task(
-                document,
-                lease_seconds=args.lease_seconds,
-                **common,
+                document, lease_seconds=args.lease_seconds, **common
             )
         elif args.command == "renew":
             next_document, receipt = renew_task(
                 document,
+                expected_attempt=args.expected_attempt,
                 lease_seconds=args.lease_seconds,
                 **common,
             )
         elif args.command == "release":
             next_document, receipt = release_task(
                 document,
+                expected_attempt=args.expected_attempt,
                 reason=args.reason,
                 **common,
             )
         elif args.command == "complete":
             next_document, receipt = complete_task(
                 document,
+                expected_attempt=args.expected_attempt,
                 completion_id=args.completion_id,
                 result=args.result,
                 **common,
             )
-        else:  # pragma: no cover - argparse owns the command vocabulary.
+        else:  # pragma: no cover
             raise AssertionError(args.command)
         _emit_transition(next_document, receipt)
         return 0
