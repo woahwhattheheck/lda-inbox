@@ -1,0 +1,41 @@
+name: inbox-contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inbox-contract.yml"
+      - "inbox.json"
+      - "validate_inbox.py"
+      - "tests/**"
+      - "README.md"
+  pull_request:
+    paths:
+      - ".github/workflows/inbox-contract.yml"
+      - "inbox.json"
+      - "validate_inbox.py"
+      - "tests/**"
+      - "README.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inbox-contract-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Run validator regressions
+        run: python -m unittest discover -s tests -v
+      - name: Validate repository inbox
+        run: python validate_inbox.py inbox.json
