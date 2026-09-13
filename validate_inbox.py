@@ -27,6 +27,10 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_non_json_constant(token: str) -> Any:
+    raise InboxValidationError(f"invalid JSON constant: {token}")
+
+
 def _require(mapping: dict[str, Any], key: str, where: str) -> Any:
     if key not in mapping:
         raise InboxValidationError(f"{where}: missing required field {key!r}")
@@ -104,7 +108,11 @@ def _validate_task(task: Any, index: int, seen_ids: set[str]) -> None:
 def validate_text(text: str) -> dict[str, Any]:
     """Parse and validate one inbox JSON document."""
     try:
-        document = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+        document = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_json_constant,
+        )
     except InboxValidationError:
         raise
     except json.JSONDecodeError as exc:
