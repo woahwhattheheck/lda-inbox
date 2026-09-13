@@ -73,6 +73,18 @@ class InboxValidationTests(unittest.TestCase):
             "unpaired Unicode surrogate",
         )
 
+    def test_parser_limits_fail_closed_without_tracebacks(self) -> None:
+        deeply_nested = (
+            '{"v":1,"tasks":[],"metadata":'
+            + "[" * 10000
+            + "0"
+            + "]" * 10000
+            + "}"
+        )
+        self.assert_invalid(deeply_nested, "nesting exceeds")
+        huge_integer = '{"v":1,"tasks":[],"metadata":' + "9" * 5000 + "}"
+        self.assert_invalid(huge_integer, "invalid JSON number")
+
     def test_root_contract_rejects_wrong_shapes_and_versions(self) -> None:
         cases = (
             ([], "root: expected"),
