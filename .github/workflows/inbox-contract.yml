@@ -7,15 +7,19 @@ on:
       - ".github/workflows/inbox-contract.yml"
       - "inbox.json"
       - "validate_inbox.py"
+      - "task_protocol.py"
       - "tests/**"
       - "README.md"
+      - "TASK_PROTOCOL.md"
   pull_request:
     paths:
       - ".github/workflows/inbox-contract.yml"
       - "inbox.json"
       - "validate_inbox.py"
+      - "task_protocol.py"
       - "tests/**"
       - "README.md"
+      - "TASK_PROTOCOL.md"
 
 permissions:
   contents: read
@@ -35,7 +39,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Run validator regressions
+      - name: Run validator and protocol regressions
         run: python -m unittest discover -s tests -v
-      - name: Validate repository inbox
+      - name: Validate repository inbox envelope
         run: python validate_inbox.py inbox.json
+      - name: Validate repository execution protocol
+        run: python task_protocol.py validate inbox.json
