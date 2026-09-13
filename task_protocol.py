@@ -385,8 +385,11 @@ def claim_task(
         attempt = execution["attempt"]
         state = execution["state"]
         if state == "leased":
+            claimed = _parse_timestamp(execution["claimed_at"], "claimed_at")
             expires = _parse_timestamp(execution["lease_expires_at"], "lease_expires_at")
             if execution["worker_id"] == worker and execution["lease_id"] == lease:
+                if instant < claimed:
+                    raise TaskProtocolError("claim replay time precedes the original claim")
                 if instant < expires:
                     return next_document, _receipt(
                         action="claim",
@@ -536,6 +539,9 @@ def release_task(
     if execution["worker_id"] != worker or execution["lease_id"] != lease:
         raise TaskProtocolError("worker_id/lease_id do not own the lease")
     if execution["state"] == "available":
+        released = _parse_timestamp(execution["released_at"], "released_at")
+        if instant < released:
+            raise TaskProtocolError("release replay time precedes the original release")
         if execution.get("release_reason") == reason:
             return next_document, _receipt(
                 action="release",
@@ -603,6 +609,11 @@ def complete_task(
             and execution.get("completion_id") == completion
             and task.get("result") == result
         ):
+            completed = _parse_timestamp(task["completed_at"], "completed_at")
+            if instant < completed:
+                raise TaskProtocolError(
+                    "completion replay time precedes the original completion"
+                )
             return next_document, _receipt(
                 action="complete",
                 task_id=task_id,
