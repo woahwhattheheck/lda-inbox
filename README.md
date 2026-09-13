@@ -1,10 +1,8 @@
 # lda-inbox
 
-Task inbox for the LocalDeviceAgent phone agent (polled by the app).
+Repository-backed task inbox for the LocalDeviceAgent phone agent.
 
-## Contract validation
-
-`inbox.json` is validated without third-party dependencies:
+## Validate
 
 ```sh
 python validate_inbox.py inbox.json
@@ -12,29 +10,43 @@ python task_protocol.py validate inbox.json
 python -m unittest discover -s tests -v
 ```
 
-The version-1 contract rejects duplicate JSON keys or task IDs, unsupported task kinds, malformed or offset-free timestamps, non-positive/boolean timeouts, and incoherent completion receipts. It also treats the repository file as a bounded execution envelope rather than an unbounded work queue:
+The base version-1 inbox validator fail-closes malformed JSON, duplicate IDs,
+unsafe identifiers, unsupported task shapes, incoherent completion receipts,
+non-finite values, unsafe path/file inputs, and bounded document/task resources.
 
-- the JSON document is capped at 1 MiB and at 256 tasks;
-- task IDs are canonical ASCII transport identifiers (`[A-Za-z0-9][A-Za-z0-9._-]*`) capped at 128 UTF-8 bytes;
-- commands are capped at 64 KiB and completion results at 256 KiB, measured as UTF-8 bytes;
-- per-task timeouts are capped at 86,400 seconds (24 hours).
+## Lease / CAS execution coordination
 
-These ceilings make publication and phone polling fail closed on accidental or hostile resource amplification while leaving normal task metadata extensible. Unknown additive fields remain permitted so producers can attach metadata without weakening the required task envelope; the 1 MiB whole-document ceiling bounds that metadata as well.
+`task_protocol.py` adds an optional coordination state for multiple pollers and
+retries. It does **not** execute commands, contact a device, or publish Git.
 
-## Lease / CAS coordination
+A worker must:
 
-`task_protocol.py` adds an optional, backwards-compatible execution state for
-multi-poller/retry coordination. A worker must first publish and then re-read an
-exact task lease before it executes the command. The lease binds worker + lease
-identity to the task specification, is time-bounded, supports explicit release
-and expired reassignment, and produces deterministic transition receipts.
+1. read `inbox.json` from an exact repository ref/blob;
+2. validate it and compute its semantic document SHA-256;
+3. stage a claim;
+4. publish only with an exact ref/blob compare-and-swap;
+5. re-read the published lease before executing anything.
 
-The CLI never overwrites `inbox.json` and never publishes a Git update; it only
-stages a next JSON snapshot after checking the caller's semantic document
-SHA-256. The publisher must still use an exact Git/ref or blob compare-and-swap
-so two workers cannot both make their independently staged claims authoritative.
+Lease authority is the exact tuple:
 
-This coordination layer does not promise exactly-once external side effects and
-does not authenticate callers or clocks. Side-effecting commands need their own
-idempotency/receipt boundary. See [TASK_PROTOCOL.md](TASK_PROTOCOL.md) for the
-state machine, trust model, publication sequence, and CLI examples.
+```text
+(worker_id, lease_id, attempt)
+```
+
+`attempt` is the immutable generation. A raw `lease_id` may be reused after an
+expiry or explicit release, but that creates a new attempt. Every
+`renew`, `release`, and `complete` request must provide `--expected-attempt`;
+a stale A→B→A lease cannot mutate the later generation even when worker and
+lease strings repeat.
+
+Claims and all transition receipts expose the authoritative `attempt`. The
+semantic document SHA and repository ref/blob CAS are separate fences:
+generation binding prevents lease-identity ABA; repository CAS prevents stale
+documents from being published.
+
+This is still **not an exactly-once external-side-effect guarantee**. A crash
+after an irreversible device/provider effect but before completion publication
+can cause a later generation to retry. Side-effecting commands need their own
+idempotency key/provider receipt or a human approval boundary.
+
+See [TASK_PROTOCOL.md](TASK_PROTOCOL.md) for the state machine and CLI examples.
