@@ -63,6 +63,16 @@ class InboxValidationTests(unittest.TestCase):
                     "invalid JSON constant",
                 )
 
+    def test_runtime_nonfinite_numbers_and_unpaired_surrogates_fail_closed(self) -> None:
+        self.assert_invalid(
+            '{"v":1,"tasks":[],"metadata":1e9999}',
+            "non-finite JSON number",
+        )
+        self.assert_invalid(
+            '{"v":1,"tasks":[],"metadata":"\\ud800"}',
+            "unpaired Unicode surrogate",
+        )
+
     def test_root_contract_rejects_wrong_shapes_and_versions(self) -> None:
         cases = (
             ([], "root: expected"),
