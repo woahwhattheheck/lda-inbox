@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,13 @@ from typing import Any, Sequence
 
 SUPPORTED_VERSION = 1
 SUPPORTED_KINDS = frozenset({"run_task"})
+MAX_DOCUMENT_BYTES = 1_048_576
+MAX_TASKS = 256
+MAX_TASK_ID_BYTES = 128
+MAX_COMMAND_BYTES = 65_536
+MAX_RESULT_BYTES = 262_144
+MAX_TIMEOUT_S = 86_400
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class InboxValidationError(ValueError):
@@ -60,6 +68,31 @@ def _validate_json_domain(value: Any) -> None:
                 stack.append((f"{where} key", key))
 
 
+def _utf8_bytes(value: str) -> int:
+    # surrogatepass keeps size accounting total even for malformed text; the
+    # ordinary JSON-domain pass still rejects unpaired surrogates explicitly.
+    return len(value.encode("utf-8", errors="surrogatepass"))
+
+
+def _require_bounded_string(
+    value: Any,
+    field: str,
+    *,
+    max_bytes: int,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise InboxValidationError(f"{field}: expected a string")
+    if not allow_empty and not value.strip():
+        raise InboxValidationError(f"{field}: expected a non-empty string")
+    size = _utf8_bytes(value)
+    if size > max_bytes:
+        raise InboxValidationError(
+            f"{field}: exceeds {max_bytes} UTF-8 bytes ({size} bytes)"
+        )
+    return value
+
+
 def _require(mapping: dict[str, Any], key: str, where: str) -> Any:
     if key not in mapping:
         raise InboxValidationError(f"{where}: missing required field {key!r}")
@@ -85,11 +118,17 @@ def _validate_task(task: Any, index: int, seen_ids: set[str]) -> None:
     if not isinstance(task, dict):
         raise InboxValidationError(f"{where}: expected a JSON object")
 
-    task_id = _require(task, "id", where)
-    if not isinstance(task_id, str) or not task_id.strip():
-        raise InboxValidationError(f"{where}.id: expected a non-empty string")
+    task_id = _require_bounded_string(
+        _require(task, "id", where),
+        f"{where}.id",
+        max_bytes=MAX_TASK_ID_BYTES,
+    )
     if task_id != task_id.strip():
         raise InboxValidationError(f"{where}.id: surrounding whitespace is not allowed")
+    if not TASK_ID_RE.fullmatch(task_id):
+        raise InboxValidationError(
+            f"{where}.id: expected a canonical ASCII identifier using letters, digits, '.', '_' or '-'"
+        )
     if task_id in seen_ids:
         raise InboxValidationError(f"{where}.id: duplicate task id {task_id!r}")
     seen_ids.add(task_id)
@@ -103,13 +142,19 @@ def _validate_task(task: Any, index: int, seen_ids: set[str]) -> None:
             f"{where}.kind: unsupported task kind {kind!r}; expected one of {supported}"
         )
 
-    command = _require(task, "command", where)
-    if not isinstance(command, str) or not command.strip():
-        raise InboxValidationError(f"{where}.command: expected a non-empty string")
+    _require_bounded_string(
+        _require(task, "command", where),
+        f"{where}.command",
+        max_bytes=MAX_COMMAND_BYTES,
+    )
 
     timeout_s = _require(task, "timeout_s", where)
     if type(timeout_s) is not int or timeout_s <= 0:
         raise InboxValidationError(f"{where}.timeout_s: expected a positive integer")
+    if timeout_s > MAX_TIMEOUT_S:
+        raise InboxValidationError(
+            f"{where}.timeout_s: exceeds maximum {MAX_TIMEOUT_S} seconds"
+        )
 
     done = _require(task, "done", where)
     if type(done) is not bool:
@@ -123,9 +168,12 @@ def _validate_task(task: Any, index: int, seen_ids: set[str]) -> None:
             raise InboxValidationError(
                 f"{where}.completed_at: completion precedes task creation"
             )
-        result = _require(task, "result", where)
-        if not isinstance(result, str):
-            raise InboxValidationError(f"{where}.result: expected a string")
+        _require_bounded_string(
+            _require(task, "result", where),
+            f"{where}.result",
+            max_bytes=MAX_RESULT_BYTES,
+            allow_empty=True,
+        )
     else:
         for field in ("completed_at", "result"):
             if field in task:
@@ -136,6 +184,12 @@ def _validate_task(task: Any, index: int, seen_ids: set[str]) -> None:
 
 def validate_text(text: str) -> dict[str, Any]:
     """Parse and validate one inbox JSON document."""
+    document_bytes = _utf8_bytes(text)
+    if document_bytes > MAX_DOCUMENT_BYTES:
+        raise InboxValidationError(
+            f"document exceeds {MAX_DOCUMENT_BYTES} UTF-8 bytes ({document_bytes} bytes)"
+        )
+
     try:
         document = json.loads(
             text,
@@ -166,6 +220,10 @@ def validate_text(text: str) -> dict[str, Any]:
     tasks = _require(document, "tasks", "root")
     if not isinstance(tasks, list):
         raise InboxValidationError("root.tasks: expected a JSON array")
+    if len(tasks) > MAX_TASKS:
+        raise InboxValidationError(
+            f"root.tasks: exceeds maximum {MAX_TASKS} tasks ({len(tasks)} tasks)"
+        )
 
     seen_ids: set[str] = set()
     for index, task in enumerate(tasks):
@@ -175,6 +233,14 @@ def validate_text(text: str) -> dict[str, Any]:
 
 def validate_path(path: Path) -> dict[str, Any]:
     """Read one UTF-8 file and validate its inbox contract."""
+    try:
+        file_bytes = path.stat().st_size
+    except OSError as exc:
+        raise InboxValidationError(f"unable to stat inbox JSON: {exc}") from exc
+    if file_bytes > MAX_DOCUMENT_BYTES:
+        raise InboxValidationError(
+            f"document exceeds {MAX_DOCUMENT_BYTES} bytes on disk ({file_bytes} bytes)"
+        )
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
