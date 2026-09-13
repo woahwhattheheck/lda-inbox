@@ -55,6 +55,14 @@ class InboxValidationTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assert_invalid(payload, "duplicate JSON key")
 
+    def test_non_json_numeric_constants_fail_closed_even_in_metadata(self) -> None:
+        for token in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(token=token):
+                self.assert_invalid(
+                    f'{{"v":1,"tasks":[],"metadata":{token}}}',
+                    "invalid JSON constant",
+                )
+
     def test_root_contract_rejects_wrong_shapes_and_versions(self) -> None:
         cases = (
             ([], "root: expected"),
