@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from validate_inbox import (
@@ -114,6 +116,98 @@ class InboxResourceEnvelopeTests(unittest.TestCase):
                 InboxValidationError,
                 rf"document exceeds {MAX_DOCUMENT_BYTES} bytes on disk",
             ):
+                validate_path(path)
+
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO creation is unavailable")
+    def test_path_rejects_fifo_without_opening_or_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.fifo"
+            os.mkfifo(path)
+            with self.assertRaisesRegex(InboxValidationError, "regular file"):
+                validate_path(path)
+
+    def test_path_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "target.json"
+            link = Path(temp_dir) / "inbox.json"
+            target.write_text(encode(task()), encoding="utf-8")
+            try:
+                link.symlink_to(target)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            with self.assertRaisesRegex(InboxValidationError, "regular file"):
+                validate_path(link)
+
+    def test_path_rejects_replacement_between_lstat_and_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.json"
+            replacement = Path(temp_dir) / "replacement.json"
+            path.write_text(encode(task(command="first")), encoding="utf-8")
+            replacement.write_text(encode(task(command="replacement")), encoding="utf-8")
+            if not path.stat().st_ino:
+                self.skipTest("filesystem does not expose stable inode identity")
+
+            real_open = os.open
+            swapped = False
+
+            def swap_then_open(candidate: object, flags: int) -> int:
+                nonlocal swapped
+                if not swapped:
+                    os.replace(replacement, path)
+                    swapped = True
+                return real_open(candidate, flags)
+
+            with mock.patch("validate_inbox.os.open", side_effect=swap_then_open):
+                with self.assertRaisesRegex(InboxValidationError, "changed while opening"):
+                    validate_path(path)
+
+    def test_path_read_is_bounded_even_if_regular_file_grows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.json"
+            path.write_text(encode(task()), encoding="utf-8")
+            real_read = os.read
+            grown = False
+
+            def grow_then_read(descriptor: int, size: int) -> bytes:
+                nonlocal grown
+                if not grown:
+                    with path.open("ab") as stream:
+                        stream.write(b" " * (MAX_DOCUMENT_BYTES + 1))
+                    grown = True
+                return real_read(descriptor, size)
+
+            with mock.patch("validate_inbox.os.read", side_effect=grow_then_read):
+                with self.assertRaisesRegex(
+                    InboxValidationError,
+                    rf"document exceeds {MAX_DOCUMENT_BYTES} bytes while reading",
+                ):
+                    validate_path(path)
+
+    def test_path_rejects_short_read_even_if_prefix_is_valid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.json"
+            valid_prefix = encode(task()).encode("utf-8")
+            path.write_bytes(valid_prefix + b" trailing-bytes")
+            real_read = os.read
+            reads = 0
+
+            def short_then_eof(descriptor: int, size: int) -> bytes:
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    return real_read(descriptor, len(valid_prefix))
+                return b""
+
+            with mock.patch("validate_inbox.os.read", side_effect=short_then_eof):
+                with self.assertRaisesRegex(InboxValidationError, "byte count changed"):
+                    validate_path(path)
+
+    def test_path_rejects_invalid_utf8_from_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.json"
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(InboxValidationError, "UTF-8"):
                 validate_path(path)
 
 
