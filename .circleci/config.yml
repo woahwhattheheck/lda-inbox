@@ -13,16 +13,16 @@ jobs:
           command: python --version
       - run:
           name: Run validator and protocol regressions
-          command: python -m unittest discover -s tests -v
-          no_output_timeout: 5m
+          command: timeout --foreground 240s python -m unittest discover -s tests -v
+          no_output_timeout: 4m
       - run:
           name: Validate repository inbox envelope
-          command: python validate_inbox.py inbox.json
-          no_output_timeout: 2m
+          command: timeout --foreground 60s python validate_inbox.py inbox.json
+          no_output_timeout: 1m
       - run:
           name: Validate repository execution protocol
-          command: python task_protocol.py validate inbox.json
-          no_output_timeout: 2m
+          command: timeout --foreground 60s python task_protocol.py validate inbox.json
+          no_output_timeout: 1m
 
 workflows:
   public-ci-redundancy-pilot:

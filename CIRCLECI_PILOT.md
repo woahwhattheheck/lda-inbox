@@ -12,7 +12,7 @@ python validate_inbox.py inbox.json
 python task_protocol.py validate inbox.json
 ```
 
-It does **not** replace, relax, or reinterpret the native GitHub check. A CircleCI pass is supplemental execution evidence only; it is never represented as a GitHub Actions success.
+The CircleCI wrapper adds only fail-closed wall-clock bounds around those commands. It does **not** replace, relax, or reinterpret the native GitHub check. A CircleCI pass is supplemental execution evidence only; it is never represented as a GitHub Actions success.
 
 ## Cost and blast-radius fence
 
@@ -21,7 +21,7 @@ It does **not** replace, relax, or reinterpret the native GitHub check. A Circle
 - one `small` Docker executor, `parallelism: 1`
 - branch filter is limited to `main` and the pilot branch
 - no deployment, publication, billing, or external mutation steps
-- command-level no-output timeouts are bounded to 2–5 minutes
+- payload execution is fail-closed at 240s + 60s + 60s; no-output windows are 4m/1m/1m
 
 Connecting the repository to CircleCI, accepting provider terms, changing a billing plan, or granting an app new permissions is deliberately **not** performed by this carrier. Those remain explicit owner/provider actions.
 
