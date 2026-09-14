@@ -107,7 +107,12 @@ def read_private_file(path: Path, limit: int) -> bytes:
         raise EffectError('PRIVATE_OPEN_FAILED') from exc
     try:
         before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_size > limit or (before.st_mode & 0o077) != 0:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > limit
+            or (before.st_mode & 0o077) != 0
+        ):
             raise EffectError('PRIVATE_FILE_NOT_SAFE')
         if hasattr(os, 'geteuid') and before.st_uid != os.geteuid():
             raise EffectError('PRIVATE_FILE_NOT_OWNED')
@@ -121,11 +126,15 @@ def read_private_file(path: Path, limit: int) -> bytes:
             raise EffectError('PRIVATE_FILE_TOO_LARGE')
         after = os.fstat(fd)
         visible = os.stat(path, follow_symlinks=False)
-        generation = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        generation = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink', 'st_mode', 'st_uid')
         if any(getattr(after, field) != getattr(before, field) for field in generation):
             raise EffectError('PRIVATE_FILE_CHANGED_DURING_READ')
         if (visible.st_dev, visible.st_ino) != (after.st_dev, after.st_ino):
             raise EffectError('PRIVATE_VISIBLE_PATH_REBOUND')
+        if not stat.S_ISREG(after.st_mode) or after.st_nlink != 1 or (after.st_mode & 0o077) != 0:
+            raise EffectError('PRIVATE_FILE_NOT_SAFE')
+        if hasattr(os, 'geteuid') and after.st_uid != os.geteuid():
+            raise EffectError('PRIVATE_FILE_NOT_OWNED')
         return bytes(data)
     finally:
         os.close(fd)
