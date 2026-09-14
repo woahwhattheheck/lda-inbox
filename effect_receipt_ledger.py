@@ -88,7 +88,9 @@ class EffectLedger:
             if con.in_transaction: con.rollback()
             raise
         finally: con.close()
-    def mark_dispatched(self,*,task_id:str,effect_id:str,token_record:Dict[str,Any],expected_document_sha256:str)->Dict[str,Any]:
+    def mark_dispatched(self,*,task_id:str,effect_id:str,token_record:Dict[str,Any],expected_document_sha256:str,now:Optional[str]=None)->Dict[str,Any]:
+        # `now` is retained as a no-op compatibility keyword for older callers.
+        # Dispatch authority never consumes it; current UTC comes from the verifier.
         task_id,effect_id=validate_id('task_id',task_id),validate_id('effect_id',effect_id); supplied=token_hash(token_record.get('token'))
         con=self._connect()
         try:
