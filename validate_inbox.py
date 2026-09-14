@@ -211,7 +211,7 @@ def validate_text(text: str) -> dict[str, Any]:
 
     _validate_json_domain(document)
     if not isinstance(document, dict):
-        raise InboxValidationError,"root: expected a JSON object")
+        raise InboxValidationError("root: expected a JSON object")
 
     version = _require(document, "v", "root")
     if type(version) is not int or version != SUPPORTED_VERSION:
@@ -253,7 +253,10 @@ def _stable_read_generation(opened: os.stat_result, after: os.stat_result) -> bo
         "st_mtime_ns",
         "st_ctime_ns",
     )
-    return all(getattr(opened, field, None) == getattr(after, field, None) for field in fields)
+    return all(
+        getattr(opened, field, None) == getattr(after, field, None)
+        for field in fields
+    )
 
 
 def _visible_path_matches(opened: os.stat_result, visible: os.stat_result) -> bool:
@@ -273,7 +276,10 @@ def _visible_path_matches(opened: os.stat_result, visible: os.stat_result) -> bo
         "st_mtime_ns",
         "st_ctime_ns",
     )
-    return all(getattr(opened, field, None) == getattr(visible, field, None) for field in fields)
+    return all(
+        getattr(opened, field, None) == getattr(visible, field, None)
+        for field in fields
+    )
 
 
 def validate_path(path: Path) -> dict[str, Any]:
