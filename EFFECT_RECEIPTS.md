@@ -38,12 +38,15 @@ ledger does not replace the repository CAS publisher.
 where a database reservation existed but the sole usable secret had not been
 published.
 
-The token writer creates a private staging inode in the target directory, loops
-until every byte is written, fsyncs it, verifies exact byte readback and mode,
-then hard-links it to the final name with create-exclusive semantics and fsyncs
-the directory. A pre-existing final path is never overwritten. Cleanup only
-unlinks a staging name when it still resolves to the exact inode created by the
-writer.
+The token writer creates the final target create-exclusively at mode 0600,
+loops until every byte is written, fsyncs it, verifies exact byte readback and
+metadata through the retained descriptor, confirms the visible path is still
+the same inode, and fsyncs the directory. A pre-existing path is never
+overwritten. A caught write/fsync/readback failure removes only the exact inode
+created by that call; it never blindly unlinks a rebound foreign pathname. A
+process crash can leave a partial file at the known target path, but the ledger
+remains `TOKEN_PENDING`, so that artifact cannot authorize dispatch and can be
+validated/removed before retry.
 
 Recovery rules:
 
