@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -231,19 +233,83 @@ def validate_text(text: str) -> dict[str, Any]:
     return document
 
 
+def _stable_file_identity(before: os.stat_result, opened: os.stat_result) -> bool:
+    """Return whether two stat records prove the same filesystem object."""
+    before_inode = getattr(before, "st_ino", 0)
+    opened_inode = getattr(opened, "st_ino", 0)
+    if not before_inode or not opened_inode:
+        return True
+    return (before.st_dev, before_inode) == (opened.st_dev, opened_inode)
+
+
+def _stable_read_generation(opened: os.stat_result, after: os.stat_result) -> bool:
+    """Return whether a regular file stayed unchanged while its bytes were read."""
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    return all(getattr(opened, field, None) == getattr(after, field, None) for field in fields)
+
+
 def validate_path(path: Path) -> dict[str, Any]:
-    """Read one UTF-8 file and validate its inbox contract."""
+    """Read one stable regular UTF-8 file and validate its inbox contract."""
     try:
-        file_bytes = path.stat().st_size
+        before = path.lstat()
     except OSError as exc:
         raise InboxValidationError(f"unable to stat inbox JSON: {exc}") from exc
-    if file_bytes > MAX_DOCUMENT_BYTES:
+    if not stat.S_ISREG(before.st_mode):
+        raise InboxValidationError("inbox JSON path must name a regular file")
+    if before.st_size > MAX_DOCUMENT_BYTES:
         raise InboxValidationError(
-            f"document exceeds {MAX_DOCUMENT_BYTES} bytes on disk ({file_bytes} bytes)"
+            f"document exceeds {MAX_DOCUMENT_BYTES} bytes on disk ({before.st_size} bytes)"
         )
+
+    flags = os.O_RDONLY
+    for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NONBLOCK", "O_NOFOLLOW"):
+        flags |= getattr(os, flag_name, 0)
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise InboxValidationError(f"unable to open inbox JSON: {exc}") from exc
+
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise InboxValidationError("inbox JSON path must name a regular file")
+        if not _stable_file_identity(before, opened):
+            raise InboxValidationError("inbox JSON path changed while opening")
+        if opened.st_size > MAX_DOCUMENT_BYTES:
+            raise InboxValidationError(
+                f"document exceeds {MAX_DOCUMENT_BYTES} bytes on disk ({opened.st_size} bytes)"
+            )
+
+        chunks: list[bytes] = []
+        remaining = MAX_DOCUMENT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) > MAX_DOCUMENT_BYTES:
+            raise InboxValidationError(
+                f"document exceeds {MAX_DOCUMENT_BYTES} bytes while reading"
+            )
+        if len(raw) != opened.st_size:
+            raise InboxValidationError(
+                "inbox JSON byte count changed while reading"
+            )
+        after = os.fstat(descriptor)
+        if not _stable_read_generation(opened, after):
+            raise InboxValidationError("inbox JSON file changed while reading")
+    except InboxValidationError:
+        raise
+    except OSError as exc:
+        raise InboxValidationError(f"unable to read inbox JSON: {exc}") from exc
+    finally:
+        os.close(descriptor)
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
         raise InboxValidationError(f"unable to read UTF-8 JSON: {exc}") from exc
     return validate_text(text)
 
