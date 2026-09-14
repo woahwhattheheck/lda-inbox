@@ -1,0 +1,35 @@
+version: 2.1
+
+jobs:
+  inbox-contract:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+    parallelism: 1
+    steps:
+      - checkout
+      - run:
+          name: Runtime receipt
+          command: python --version
+      - run:
+          name: Run validator and protocol regressions
+          command: timeout --foreground 240s python -m unittest discover -s tests -v
+          no_output_timeout: 4m
+      - run:
+          name: Validate repository inbox envelope
+          command: timeout --foreground 60s python validate_inbox.py inbox.json
+          no_output_timeout: 1m
+      - run:
+          name: Validate repository execution protocol
+          command: timeout --foreground 60s python task_protocol.py validate inbox.json
+          no_output_timeout: 1m
+
+workflows:
+  public-ci-redundancy-pilot:
+    jobs:
+      - inbox-contract:
+          filters:
+            branches:
+              only:
+                - main
+                - zms-k7q9/circleci-public-pilot
