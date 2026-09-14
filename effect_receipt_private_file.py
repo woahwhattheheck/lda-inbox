@@ -1,25 +1,22 @@
 from __future__ import annotations
 
 import os
-import secrets
 import stat
 from pathlib import Path
-from typing import Optional
 
 from effect_receipt_common import EffectError
 
 
-def _cleanup_stage(parent_fd: int, stage_name: str, expected: Optional[os.stat_result]) -> None:
-    if expected is None:
-        return
+def _unlink_if_same(parent_fd: int, name: str, expected: os.stat_result) -> None:
     try:
-        visible = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+        visible = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except (FileNotFoundError, OSError):
         return
     if (visible.st_dev, visible.st_ino) != (expected.st_dev, expected.st_ino):
         return
     try:
-        os.unlink(stage_name, dir_fd=parent_fd)
+        os.unlink(name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
     except OSError:
         pass
 
@@ -35,19 +32,21 @@ def publish_private_file(path: Path, raw: bytes) -> None:
         parent_fd = os.open(parent, dflags)
     except OSError as exc:
         raise EffectError('PRIVATE_PARENT_OPEN_FAILED') from exc
-    stage_name = f'.{name}.pending-{secrets.token_hex(12)}'
     fd = None
-    stage_stat = None
+    created = None
+    success = False
     try:
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
         try:
-            fd = os.open(stage_name, flags, 0o600, dir_fd=parent_fd)
+            fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
+        except FileExistsError as exc:
+            raise EffectError('PRIVATE_PATH_OCCUPIED') from exc
         except OSError as exc:
-            raise EffectError('PRIVATE_STAGE_CREATE_FAILED') from exc
+            raise EffectError('PRIVATE_CREATE_FAILED') from exc
         os.fchmod(fd, 0o600)
-        stage_stat = os.fstat(fd)
-        if not stat.S_ISREG(stage_stat.st_mode):
-            raise EffectError('PRIVATE_STAGE_NOT_REGULAR')
+        created = os.fstat(fd)
+        if not stat.S_ISREG(created.st_mode):
+            raise EffectError('PRIVATE_FILE_NOT_REGULAR')
         offset = 0
         while offset < len(raw):
             try:
@@ -70,37 +69,28 @@ def publish_private_file(path: Path, raw: bytes) -> None:
             readback.extend(chunk)
         if bytes(readback) != raw:
             raise EffectError('PRIVATE_READBACK_MISMATCH')
-        stage_stat = os.fstat(fd)
-        if stage_stat.st_size != len(raw) or (stage_stat.st_mode & 0o077) != 0:
-            raise EffectError('PRIVATE_FILE_METADATA_INVALID')
-        try:
-            os.link(stage_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
-        except FileExistsError as exc:
-            raise EffectError('PRIVATE_PATH_OCCUPIED') from exc
-        except OSError as exc:
-            raise EffectError('PRIVATE_PUBLISH_FAILED') from exc
-        try:
-            os.fsync(parent_fd)
-        except OSError as exc:
-            raise EffectError('PRIVATE_DIRECTORY_FSYNC_FAILED') from exc
+        final_fd = os.fstat(fd)
         visible = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (visible.st_dev, visible.st_ino) != (stage_stat.st_dev, stage_stat.st_ino) or not stat.S_ISREG(visible.st_mode):
-            raise EffectError('PRIVATE_VISIBLE_PATH_REBOUND')
-        _cleanup_stage(parent_fd, stage_name, stage_stat)
+        if (
+            (final_fd.st_dev, final_fd.st_ino) != (created.st_dev, created.st_ino)
+            or (visible.st_dev, visible.st_ino) != (created.st_dev, created.st_ino)
+            or final_fd.st_size != len(raw)
+            or (final_fd.st_mode & 0o077) != 0
+        ):
+            raise EffectError('PRIVATE_FINAL_METADATA_INVALID')
         try:
             os.fsync(parent_fd)
         except OSError as exc:
             raise EffectError('PRIVATE_DIRECTORY_FSYNC_FAILED') from exc
-        final = os.fstat(fd)
-        if final.st_nlink < 1 or final.st_size != len(raw):
-            raise EffectError('PRIVATE_FINAL_METADATA_INVALID')
+        success = True
     finally:
+        if not success and created is not None:
+            _unlink_if_same(parent_fd, name, created)
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        _cleanup_stage(parent_fd, stage_name, stage_stat)
         try:
             os.close(parent_fd)
         except OSError:
