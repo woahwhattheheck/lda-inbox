@@ -2,14 +2,26 @@ from __future__ import annotations
 
 import os
 import tempfile
+import stat
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from validate_inbox import InboxValidationError, validate_path
+from validate_inbox import InboxValidationError, _visible_path_matches, validate_path
 
 
 class VisiblePathRebindTests(unittest.TestCase):
+    def test_final_path_authority_requires_stable_inode_identity(self) -> None:
+        mode = stat.S_IFREG | 0o600
+        opened = SimpleNamespace(
+            st_dev=1, st_ino=0, st_mode=mode, st_nlink=1, st_size=10
+        )
+        visible = SimpleNamespace(
+            st_dev=1, st_ino=0, st_mode=mode, st_nlink=1, st_size=10
+        )
+        self.assertFalse(_visible_path_matches(opened, visible))
+
     def test_post_read_foreign_replacement_is_rejected_and_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -40,9 +40,10 @@ def _visible_path_matches(opened: os.stat_result, visible: os.stat_result) -> bo
 
     opened_inode = getattr(opened, "st_ino", 0)
     visible_inode = getattr(visible, "st_ino", 0)
-    if opened_inode and visible_inode:
-        if (opened.st_dev, opened_inode) != (visible.st_dev, visible_inode):
-            return False
+    if not opened_inode or not visible_inode:
+        return False
+    if (opened.st_dev, opened_inode) != (visible.st_dev, visible_inode):
+        return False
 
     fields = ("st_dev", "st_mode", "st_nlink", "st_size")
     return all(getattr(opened, field, None) == getattr(visible, field, None) for field in fields)
