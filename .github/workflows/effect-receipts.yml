@@ -1,0 +1,68 @@
+name: effect-receipts
+
+on:
+  push:
+    paths:
+      - "effect_receipt_common.py"
+      - "effect_receipt_authority.py"
+      - "effect_receipt_io.py"
+      - "effect_receipt_private_file.py"
+      - "effect_receipt_ledger.py"
+      - "effect_receipts.py"
+      - "EFFECT_RECEIPTS.md"
+      - "tests/test_effect_receipts.py"
+      - ".github/workflows/effect-receipts.yml"
+  pull_request:
+    paths:
+      - "effect_receipt_common.py"
+      - "effect_receipt_authority.py"
+      - "effect_receipt_io.py"
+      - "effect_receipt_private_file.py"
+      - "effect_receipt_ledger.py"
+      - "effect_receipts.py"
+      - "EFFECT_RECEIPTS.md"
+      - "tests/test_effect_receipts.py"
+      - ".github/workflows/effect-receipts.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: effect-receipts-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Syntax
+        run: >-
+          python -m py_compile
+          effect_receipt_common.py
+          effect_receipt_authority.py
+          effect_receipt_io.py
+          effect_receipt_private_file.py
+          effect_receipt_ledger.py
+          effect_receipts.py
+          tests/test_effect_receipts.py
+      - name: Focused normal
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: python -m unittest -v tests.test_effect_receipts
+      - name: Focused optimized
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: python -O -m unittest -v tests.test_effect_receipts
