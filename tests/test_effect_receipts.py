@@ -65,6 +65,23 @@ class T(unittest.TestCase):
   with mock.patch('effect_receipt_io.os.write',side_effect=OSError('disk')):
    with self.assertRaisesRegex(EffectError,'TOKEN_WRITE_FAILED'):self.publish(p,pub,tok)
   self.assertFalse(p.exists());self.assertEqual(self.ledger.inspect(task_id='task-1',effect_id='effect-1')['state'],'TOKEN_PENDING')
+ def test_fsync_failure_cleans_exact_created_target_and_stays_pending(self):
+  p,pub,tok=self.prep()
+  with mock.patch('effect_receipt_private_file.os.fsync',side_effect=OSError('fsync')):
+   with self.assertRaisesRegex(EffectError,'TOKEN_FSYNC_FAILED'):self.publish(p,pub,tok)
+  self.assertFalse(p.exists());self.assertEqual(self.ledger.inspect(task_id='task-1',effect_id='effect-1')['state'],'TOKEN_PENDING')
+ def test_crash_residue_is_non_authoritative_until_removed_and_rotated(self):
+  p,pub,tok=self.prep();p.write_bytes(b'{"partial":');os.chmod(p,0o600)
+  replay_path,replay,reissued=self.prep(p);self.assertEqual(replay_path,p);self.assertEqual(replay['state'],'TOKEN_PENDING');self.assertIsNone(reissued)
+  with self.assertRaises(EffectError):read_token_file(p)
+  with self.assertRaisesRegex(EffectError,'TOKEN_PATH_OCCUPIED'):self.publish(p,pub,tok)
+  self.assertEqual(self.ledger.inspect(task_id='task-1',effect_id='effect-1')['state'],'TOKEN_PENDING')
+  p.unlink();pub2,tok2=self.ledger.rotate_pending_token(task_id='task-1',effect_id='effect-1',token_path=normalized_token_path(p),expected_document_sha256=self.docsha,now='2026-09-14T09:07:00Z');self.assertEqual(self.publish(p,pub2,tok2)['state'],'PREPARED')
+ def test_new_lease_wins_if_old_token_published_but_not_finalized(self):
+  p1,pub1,tok1=self.prep();write_token_file(p1,task_id=pub1['task_id'],effect_id=pub1['effect_id'],effect_generation=pub1['effect_generation'],token=tok1,worker_id=pub1['lease']['worker_id'],lease_id=pub1['lease']['lease_id'],attempt=pub1['lease']['attempt'],task_sha256=pub1['task_sha256']);old=read_token_file(p1)
+  self.write_inbox(2,'w2','l2');p2,pub2,tok2=self.prep(self.root/'t2.json',2,'w2','l2');self.assertEqual(pub2['effect_generation'],2)
+  with self.assertRaisesRegex(EffectError,'STALE_OR_INVALID'):self.ledger.finalize_prepare(task_id='task-1',effect_id='effect-1',token_record=old)
+  self.assertEqual(self.publish(p2,pub2,tok2)['state'],'PREPARED')
  def test_finalize_is_exact_token_and_generation_bound(self):
   p,pub,tok=self.prep();write_token_file(p,task_id=pub['task_id'],effect_id=pub['effect_id'],effect_generation=pub['effect_generation'],token=tok,worker_id=pub['lease']['worker_id'],lease_id=pub['lease']['lease_id'],attempt=pub['lease']['attempt'],task_sha256=pub['task_sha256']);rec=read_token_file(p);bad=dict(rec,effect_generation=2)
   with self.assertRaisesRegex(EffectError,'TOKEN_BINDING_MISMATCH'):self.ledger.finalize_prepare(task_id='task-1',effect_id='effect-1',token_record=bad)
