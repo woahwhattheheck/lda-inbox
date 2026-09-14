@@ -7,20 +7,6 @@ from pathlib import Path
 from effect_receipt_common import EffectError
 
 
-def _unlink_if_same(parent_fd: int, name: str, expected: os.stat_result) -> None:
-    try:
-        visible = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except (FileNotFoundError, OSError):
-        return
-    if (visible.st_dev, visible.st_ino) != (expected.st_dev, expected.st_ino):
-        return
-    try:
-        os.unlink(name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    except OSError:
-        pass
-
-
 def publish_private_file(path: Path, raw: bytes) -> None:
     path = Path(path)
     parent = path.parent if str(path.parent) else Path('.')
@@ -33,8 +19,6 @@ def publish_private_file(path: Path, raw: bytes) -> None:
     except OSError as exc:
         raise EffectError('PRIVATE_PARENT_OPEN_FAILED') from exc
     fd = None
-    created = None
-    success = False
     try:
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
         try:
@@ -82,10 +66,10 @@ def publish_private_file(path: Path, raw: bytes) -> None:
             os.fsync(parent_fd)
         except OSError as exc:
             raise EffectError('PRIVATE_DIRECTORY_FSYNC_FAILED') from exc
-        success = True
     finally:
-        if not success and created is not None:
-            _unlink_if_same(parent_fd, name, created)
+        # Failure after O_EXCL creation intentionally leaves the visible pathname
+        # untouched. TOKEN_PENDING is non-authoritative; a residue is reconciled
+        # explicitly. Never perform check-then-unlink on a contested public name.
         if fd is not None:
             try:
                 os.close(fd)

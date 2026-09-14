@@ -22,15 +22,17 @@ same lease generation is still live in the repository's canonical `inbox.json`.
 5. Immediately before the real irreversible action, call `dispatch` with the
    token and a fresh semantic digest from the current published `inbox.json`.
    `dispatch` independently re-reads that canonical file while holding the
-   ledger transition lock. Only the exact still-live lease generation can move
-   `PREPARED -> DISPATCHED`.
+   ledger transition lock and samples current UTC inside the verifier. There is
+   no caller-supplied dispatch clock. Only the exact still-live lease generation
+   can move `PREPARED -> DISPATCHED`.
 6. The surrounding caller may invoke the external action **only after** a
    successful `DISPATCHED` result. Record a bound provider/operator receipt with
    `succeed` or `fail-final` afterward.
 
-The `--now` value and the repository publication/re-read step remain trusted
-coordinator inputs, exactly as documented by `TASK_PROTOCOL.md`. The effect
-ledger does not replace the repository CAS publisher.
+`prepare`/pending-recovery retain the task protocol's explicit coordinator time
+input because they do not grant external-action authority. The action-permitting
+`dispatch` boundary does not accept or consume caller time; it uses process UTC.
+The effect ledger does not replace the repository CAS publisher.
 
 ## Token publication and crash recovery
 
@@ -42,11 +44,12 @@ The token writer creates the final target create-exclusively at mode 0600,
 loops until every byte is written, fsyncs it, verifies exact byte readback and
 metadata through the retained descriptor, confirms the visible path is still
 the same inode, and fsyncs the directory. A pre-existing path is never
-overwritten. A caught write/fsync/readback failure removes only the exact inode
-created by that call; it never blindly unlinks a rebound foreign pathname. A
-process crash can leave a partial file at the known target path, but the ledger
-remains `TOKEN_PENDING`, so that artifact cannot authorize dispatch and can be
-validated/removed before retry.
+overwritten. If any post-create write/fsync/readback step fails, the writer does
+**not** unlink, remove, or replace the public pathname: the residue is left for
+explicit reconciliation while the ledger remains `TOKEN_PENDING`. This avoids
+a check-then-unlink race that could delete a foreign successor. A process crash
+can likewise leave a partial file at the known target path, but that artifact
+cannot authorize dispatch and must be validated/removed before retry.
 
 Recovery rules:
 
@@ -54,6 +57,8 @@ Recovery rules:
   unpublished secret and retry publication.
 - `TOKEN_PENDING` + complete matching token file: retry finalizes the existing
   artifact to `PREPARED`; it does not mint a second capability.
+- `TOKEN_PENDING` + partial/unsafe residue: fail closed until an operator
+  validates and removes that exact residue; publication code does not unlink it.
 - `PREPARED` + missing token file: fail closed. The ledger will not regenerate a
   capability that may already have escaped.
 - A short write, write/fsync failure, target collision, or interruption before
@@ -91,11 +96,12 @@ python effect_receipts.py --db .local/effects.sqlite prepare \
   --expected-document-sha256 "$SHA" --now 2026-09-14T09:01:00Z
 
 # Re-read the exact current published inbox immediately before dispatch and
-# recompute SHA. A stale digest or stale lease generation fails closed.
+# recompute SHA. A stale digest, stale lease generation, or wall-clock-expired
+# lease fails closed. Dispatch intentionally has no --now argument.
 SHA="$(python task_protocol.py digest inbox.json)"
 python effect_receipts.py --db .local/effects.sqlite dispatch \
   --token-file .local/effect-42-attempt-3.token.json \
-  --expected-document-sha256 "$SHA" --now 2026-09-14T09:01:10Z
+  --expected-document-sha256 "$SHA"
 ```
 
 ## State machine

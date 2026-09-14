@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib, os, secrets, sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
-from effect_receipt_authority import require_live_lease
+from effect_receipt_authority import require_live_lease, require_live_lease_current
 from effect_receipt_common import (EffectError, canonical_payload, public_row, token_hash, validate_attempt, validate_id, validate_receipt_ref, validate_sha, validate_token_path)
 
 class EffectLedger:
@@ -27,6 +27,8 @@ class EffectLedger:
         except OSError as exc: raise EffectError('DB_PERMISSION_HARDENING_FAILED') from exc
     def _authority(self,*,expected_document_sha256,task_id,worker_id,lease_id,attempt,now,expected_task_sha256=None):
         return require_live_lease(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=worker_id,lease_id=lease_id,attempt=attempt,now=now,expected_task_sha256=expected_task_sha256)
+    def _authority_current(self,*,expected_document_sha256,task_id,worker_id,lease_id,attempt,expected_task_sha256=None):
+        return require_live_lease_current(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=worker_id,lease_id=lease_id,attempt=attempt,expected_task_sha256=expected_task_sha256)
     def prepare(self,*,task_id:str,effect_id:str,operation:str,payload:Any,worker_id:str,lease_id:str,attempt:int,token_path:str,expected_document_sha256:str,now:str)->Tuple[Dict[str,Any],Optional[str]]:
         task_id,effect_id=validate_id('task_id',task_id),validate_id('effect_id',effect_id); operation=validate_id('operation',operation); worker_id,lease_id=validate_id('worker_id',worker_id),validate_id('lease_id',lease_id); attempt=validate_attempt(attempt); token_path=validate_token_path(token_path)
         authority=self._authority(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=worker_id,lease_id=lease_id,attempt=attempt,now=now)
@@ -86,7 +88,9 @@ class EffectLedger:
             if con.in_transaction: con.rollback()
             raise
         finally: con.close()
-    def mark_dispatched(self,*,task_id:str,effect_id:str,token_record:Dict[str,Any],expected_document_sha256:str,now:str)->Dict[str,Any]:
+    def mark_dispatched(self,*,task_id:str,effect_id:str,token_record:Dict[str,Any],expected_document_sha256:str,now:Optional[str]=None)->Dict[str,Any]:
+        # `now` is retained as a no-op compatibility keyword for older callers.
+        # Dispatch authority never consumes it; current UTC comes from the verifier.
         task_id,effect_id=validate_id('task_id',task_id),validate_id('effect_id',effect_id); supplied=token_hash(token_record.get('token'))
         con=self._connect()
         try:
@@ -95,7 +99,7 @@ class EffectLedger:
             if token_record.get('effect_generation')!=row['effect_generation'] or token_record.get('worker_id')!=row['worker_id'] or token_record.get('lease_id')!=row['lease_id'] or token_record.get('attempt')!=row['attempt'] or token_record.get('task_sha256')!=row['task_sha256']: raise EffectError('TOKEN_BINDING_MISMATCH')
             if row['state']=='TOKEN_PENDING': raise EffectError('TOKEN_PUBLICATION_INCOMPLETE')
             if row['state']=='PREPARED':
-                self._authority(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=row['worker_id'],lease_id=row['lease_id'],attempt=row['attempt'],now=now,expected_task_sha256=row['task_sha256'])
+                self._authority_current(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=row['worker_id'],lease_id=row['lease_id'],attempt=row['attempt'],expected_task_sha256=row['task_sha256'])
                 con.execute("UPDATE effects SET state='DISPATCHED',dispatch_count=1 WHERE task_id=? AND effect_id=? AND state='PREPARED'",(task_id,effect_id)); con.commit(); return public_row(self._row(con,task_id,effect_id))
             if row['state']=='DISPATCHED':
                 con.execute("UPDATE effects SET state='RECONCILIATION_REQUIRED' WHERE task_id=? AND effect_id=? AND state='DISPATCHED'",(task_id,effect_id)); con.commit(); raise EffectError('RECONCILIATION_REQUIRED_AFTER_DISPATCH')
