@@ -253,21 +253,33 @@ def _stable_read_generation(opened: os.stat_result, after: os.stat_result) -> bo
         "st_mtime_ns",
         "st_ctime_ns",
     )
-    return all(getattr(opened, field, None) == getattr(after, field, None) for field in fields)
+    return all(
+        getattr(opened, field, None) == getattr(after, field, None)
+        for field in fields
+    )
 
 
 def _visible_path_matches(opened: os.stat_result, visible: os.stat_result) -> bool:
-    """Return whether the final visible path names the retained regular file."""
+    """Return whether the final visible path names the retained regular-file generation."""
     if not stat.S_ISREG(visible.st_mode):
         return False
     opened_inode = getattr(opened, "st_ino", 0)
     visible_inode = getattr(visible, "st_ino", 0)
     if not opened_inode or not visible_inode:
         return False
-    if (opened.st_dev, opened_inode) != (visible.st_dev, visible_inode):
-        return False
-    fields = ("st_dev", "st_mode", "st_nlink", "st_size")
-    return all(getattr(opened, field, None) == getattr(visible, field, None) for field in fields)
+    fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    return all(
+        getattr(opened, field, None) == getattr(visible, field, None)
+        for field in fields
+    )
 
 
 def validate_path(path: Path) -> dict[str, Any]:
@@ -326,7 +338,10 @@ def validate_path(path: Path) -> dict[str, Any]:
             visible_after = path.lstat()
         except OSError as exc:
             raise InboxValidationError("inbox JSON path changed while reading") from exc
-        if not _visible_path_matches(after, visible_after):
+        final_descriptor = os.fstat(descriptor)
+        if not _stable_read_generation(after, final_descriptor):
+            raise InboxValidationError("inbox JSON file changed while reading")
+        if not _visible_path_matches(final_descriptor, visible_after):
             raise InboxValidationError("inbox JSON path changed while reading")
     except InboxValidationError:
         raise
