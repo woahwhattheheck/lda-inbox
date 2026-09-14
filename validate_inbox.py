@@ -293,6 +293,10 @@ def validate_path(path: Path) -> dict[str, Any]:
             raise InboxValidationError(
                 f"document exceeds {MAX_DOCUMENT_BYTES} bytes while reading"
             )
+        if len(raw) != opened.st_size:
+            raise InboxValidationError(
+                "inbox JSON byte count changed while reading"
+            )
         after = os.fstat(descriptor)
         if not _stable_read_generation(opened, after):
             raise InboxValidationError("inbox JSON file changed while reading")

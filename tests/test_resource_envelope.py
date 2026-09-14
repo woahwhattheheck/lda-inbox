@@ -184,6 +184,25 @@ class InboxResourceEnvelopeTests(unittest.TestCase):
                 ):
                     validate_path(path)
 
+    def test_path_rejects_short_read_even_if_prefix_is_valid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inbox.json"
+            valid_prefix = encode(task()).encode("utf-8")
+            path.write_bytes(valid_prefix + b" trailing-bytes")
+            real_read = os.read
+            reads = 0
+
+            def short_then_eof(descriptor: int, size: int) -> bytes:
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    return real_read(descriptor, len(valid_prefix))
+                return b""
+
+            with mock.patch("validate_inbox.os.read", side_effect=short_then_eof):
+                with self.assertRaisesRegex(InboxValidationError, "byte count changed"):
+                    validate_path(path)
+
     def test_path_rejects_invalid_utf8_from_regular_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "inbox.json"
