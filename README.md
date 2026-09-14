@@ -14,6 +14,11 @@ The base version-1 inbox validator fail-closes malformed JSON, duplicate IDs,
 unsafe identifiers, unsupported task shapes, incoherent completion receipts,
 non-finite values, unsafe path/file inputs, and bounded document/task resources.
 
+Path validation opens one stable regular-file generation through a bounded
+file descriptor. Symlinks, FIFOs, devices, pathname replacement, in-read file
+mutation, and growth beyond the byte ceiling fail closed before JSON authority
+is granted.
+
 ## Lease / CAS execution coordination
 
 `task_protocol.py` adds an optional coordination state for multiple pollers and
