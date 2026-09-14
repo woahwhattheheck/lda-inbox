@@ -155,6 +155,9 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
         )
 
     claimed = _parse_timestamp(execution.get("claimed_at"), f"{where}.claimed_at")
+    created = _parse_timestamp(task.get("created"), f"tasks[{index}].created")
+    if claimed < created:
+        raise TaskProtocolError(f"{where}.claimed_at: precedes task creation")
     expires = _parse_timestamp(
         execution.get("lease_expires_at"), f"{where}.lease_expires_at"
     )
@@ -202,6 +205,10 @@ def _validate_execution(task: dict[str, Any], index: int) -> None:
         released = _parse_timestamp(execution.get("released_at"), f"{where}.released_at")
         if released < claimed:
             raise TaskProtocolError(f"{where}.released_at: precedes claimed_at")
+        if released >= expires:
+            raise TaskProtocolError(
+                f"{where}.released_at: release occurred at/after lease expiry"
+            )
         reason = execution.get("release_reason")
         if reason is not None:
             if not isinstance(reason, str):
