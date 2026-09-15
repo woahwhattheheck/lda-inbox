@@ -1,17 +1,86 @@
 from __future__ import annotations
-import hashlib, os, secrets, sqlite3
+import hashlib, os, secrets, sqlite3, stat
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from effect_receipt_authority import require_live_lease, require_live_lease_current
 from effect_receipt_common import (EffectError, canonical_payload, public_row, token_hash, validate_attempt, validate_id, validate_receipt_ref, validate_sha, validate_token_path)
 
+
+def _owned(info):
+    if hasattr(os,'geteuid') and info.st_uid!=os.geteuid(): raise EffectError('DB_PATH_OWNER_MISMATCH')
+
+
+def _safe_file_info(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise EffectError('DB_PATH_UNSAFE')
+    _owned(info)
+
+
+def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]:
+    path=Path(db_path)
+    if str(path)==':memory:': raise EffectError('PERSISTENT_DB_REQUIRED')
+    parent=path.parent if str(path.parent) else Path('.')
+    try: parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    except OSError as exc: raise EffectError('DB_PARENT_PREPARE_FAILED') from exc
+    dflags=os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0)
+    try: parent_fd=os.open(parent,dflags)
+    except OSError as exc: raise EffectError('DB_PARENT_UNSAFE') from exc
+    fd=None
+    try:
+        parent_info=os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_info.st_mode): raise EffectError('DB_PARENT_UNSAFE')
+        _owned(parent_info)
+        if parent_info.st_mode&(stat.S_IWGRP|stat.S_IWOTH): raise EffectError('DB_PARENT_UNSAFE')
+        name=path.name
+        if not name or name in ('.','..'): raise EffectError('DB_PATH_UNSAFE')
+        try: visible=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+        except FileNotFoundError:
+            flags=os.O_RDWR|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0)
+            try: fd=os.open(name,flags,0o600,dir_fd=parent_fd)
+            except OSError as exc: raise EffectError('DB_CREATE_FAILED') from exc
+        except OSError as exc: raise EffectError('DB_PATH_STAT_FAILED') from exc
+        else:
+            _safe_file_info(visible)
+            flags=os.O_RDWR|getattr(os,'O_NOFOLLOW',0)
+            try: fd=os.open(name,flags,dir_fd=parent_fd)
+            except OSError as exc: raise EffectError('DB_OPEN_FAILED') from exc
+            opened=os.fstat(fd)
+            _safe_file_info(opened)
+            if (opened.st_dev,opened.st_ino)!=(visible.st_dev,visible.st_ino): raise EffectError('DB_PATH_REBOUND')
+        info=os.fstat(fd); _safe_file_info(info)
+        try: os.fchmod(fd,0o600)
+        except OSError as exc: raise EffectError('DB_PERMISSION_HARDENING_FAILED') from exc
+        try: os.fsync(fd)
+        except OSError as exc: raise EffectError('DB_FSYNC_FAILED') from exc
+        after=os.fstat(fd); _safe_file_info(after)
+        visible=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+        if (visible.st_dev,visible.st_ino)!=(after.st_dev,after.st_ino): raise EffectError('DB_PATH_REBOUND')
+        try: canonical=parent.resolve(strict=True)/name
+        except OSError as exc: raise EffectError('DB_PARENT_UNSAFE') from exc
+        return canonical,(after.st_dev,after.st_ino)
+    finally:
+        if fd is not None:
+            try: os.close(fd)
+            except OSError: pass
+        try: os.close(parent_fd)
+        except OSError: pass
+
+
 class EffectLedger:
     def __init__(self,db_path:Union[os.PathLike,str]):
-        path=Path(db_path)
-        if str(path)==':memory:': raise EffectError('PERSISTENT_DB_REQUIRED')
-        path.parent.mkdir(parents=True,exist_ok=True); self.db_path=str(path); self._init_db()
+        path,identity=_prepare_db_path(db_path); self.db_path=str(path); self._db_identity=identity; self._db_uri=path.as_uri()+'?mode=rw'; self._init_db(); self._assert_db_identity()
+    def _assert_db_identity(self):
+        try: info=os.lstat(self.db_path)
+        except OSError as exc: raise EffectError('DB_PATH_REBOUND') from exc
+        try: _safe_file_info(info)
+        except EffectError as exc: raise EffectError('DB_PATH_REBOUND') from exc
+        if (info.st_dev,info.st_ino)!=self._db_identity: raise EffectError('DB_PATH_REBOUND')
     def _connect(self):
-        con=sqlite3.connect(self.db_path,timeout=10.0,isolation_level=None); con.row_factory=sqlite3.Row; con.execute('PRAGMA foreign_keys=ON'); con.execute('PRAGMA busy_timeout=10000'); return con
+        self._assert_db_identity()
+        con=sqlite3.connect(self._db_uri,timeout=10.0,isolation_level=None,uri=True)
+        try: self._assert_db_identity()
+        except Exception:
+            con.close(); raise
+        con.row_factory=sqlite3.Row; con.execute('PRAGMA foreign_keys=ON'); con.execute('PRAGMA busy_timeout=10000'); return con
     def _init_db(self):
         con=self._connect()
         try:
@@ -23,8 +92,7 @@ class EffectLedger:
             PRIMARY KEY(task_id,effect_id),CHECK(effect_generation>=1),CHECK(dispatch_count>=0 AND dispatch_count<=1),
             CHECK(state IN ('TOKEN_PENDING','PREPARED','DISPATCHED','SUCCEEDED','FAILED_FINAL','RECONCILIATION_REQUIRED')))""")
         finally: con.close()
-        try: os.chmod(self.db_path,0o600)
-        except OSError as exc: raise EffectError('DB_PERMISSION_HARDENING_FAILED') from exc
+        self._assert_db_identity()
     def _authority(self,*,expected_document_sha256,task_id,worker_id,lease_id,attempt,now,expected_task_sha256=None):
         return require_live_lease(expected_document_sha256=expected_document_sha256,task_id=task_id,worker_id=worker_id,lease_id=lease_id,attempt=attempt,now=now,expected_task_sha256=expected_task_sha256)
     def _authority_current(self,*,expected_document_sha256,task_id,worker_id,lease_id,attempt,expected_task_sha256=None):
