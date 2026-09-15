@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - zrc-p3x8/effect-ledger-sqlite-path-custody
+      - main
     paths:
       - ".github/aster56_materialize.py.b64.*"
       - ".github/workflows/aster56-materialize.yml"
