@@ -52,7 +52,8 @@ def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]
         try: os.fsync(fd)
         except OSError as exc: raise EffectError('DB_FSYNC_FAILED') from exc
         after=os.fstat(fd); _safe_file_info(after)
-        visible=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+        try: visible=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+        except OSError as exc: raise EffectError('DB_PATH_REBOUND') from exc
         if (visible.st_dev,visible.st_ino)!=(after.st_dev,after.st_ino): raise EffectError('DB_PATH_REBOUND')
         try: canonical=parent.resolve(strict=True)/name
         except OSError as exc: raise EffectError('DB_PARENT_UNSAFE') from exc
@@ -76,7 +77,9 @@ class EffectLedger:
         if (info.st_dev,info.st_ino)!=self._db_identity: raise EffectError('DB_PATH_REBOUND')
     def _connect(self):
         self._assert_db_identity()
-        con=sqlite3.connect(self._db_uri,timeout=10.0,isolation_level=None,uri=True)
+        try: con=sqlite3.connect(self._db_uri,timeout=10.0,isolation_level=None,uri=True)
+        except sqlite3.Error:
+            self._assert_db_identity(); raise
         try: self._assert_db_identity()
         except Exception:
             con.close(); raise
