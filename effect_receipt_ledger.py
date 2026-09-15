@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, Tuple, Union
 from effect_receipt_authority import require_live_lease, require_live_lease_current
 from effect_receipt_common import (EffectError, canonical_payload, public_row, token_hash, validate_attempt, validate_id, validate_receipt_ref, validate_sha, validate_token_path)
 
+_AUXILIARY_SUFFIXES = ('-wal', '-shm', '-journal')
+
 
 def _owned(info):
     if hasattr(os,'geteuid') and info.st_uid!=os.geteuid(): raise EffectError('DB_PATH_OWNER_MISMATCH')
@@ -13,6 +15,27 @@ def _owned(info):
 def _safe_file_info(info):
     if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise EffectError('DB_PATH_UNSAFE')
     _owned(info)
+
+
+def _assert_auxiliary_paths_safe(db_path:Union[os.PathLike,str])->None:
+    """Reject unsafe pre-existing SQLite sidecar generations before SQLite sees them.
+
+    This is deliberately a controlled-boundary check, not a claim that stock Python
+    sqlite3 can bind SQLite's hidden sidecar descriptors against a concurrent same-UID
+    namespace adversary after this check. See EFFECT_LEDGER_SIDECAR_BOUNDARY.md.
+    """
+    base=os.fspath(db_path)
+    for suffix in _AUXILIARY_SUFFIXES:
+        candidate=base+suffix
+        try: info=os.lstat(candidate)
+        except FileNotFoundError: continue
+        except OSError as exc: raise EffectError('DB_AUXILIARY_PATH_UNSAFE') from exc
+        try:
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise EffectError('DB_AUXILIARY_PATH_UNSAFE')
+            _owned(info)
+            if info.st_mode&(stat.S_IRWXG|stat.S_IRWXO): raise EffectError('DB_AUXILIARY_PATH_UNSAFE')
+        except EffectError as exc:
+            raise EffectError('DB_AUXILIARY_PATH_UNSAFE') from exc
 
 
 def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]:
@@ -66,7 +89,6 @@ def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]
         except OSError: pass
 
 
-
 def _descriptor_db_uri(fd:int,identity:Tuple[int,int])->str:
     """Return a verified path that opens the retained file generation."""
     for root in (Path('/proc/self/fd'),Path('/dev/fd')):
@@ -116,7 +138,7 @@ class EffectLedger:
             except OSError: pass
             raise
     def _connect(self):
-        self._assert_db_identity()
+        self._assert_db_identity(); _assert_auxiliary_paths_safe(self.db_path)
         fd=self._open_db_descriptor(); con=None; anchor_bound=False
         try:
             uri=_descriptor_db_uri(fd,self._db_identity)
@@ -125,9 +147,11 @@ class EffectLedger:
                 self._assert_db_identity(); raise
             opened=os.fstat(fd); _safe_file_info(opened)
             if (opened.st_dev,opened.st_ino)!=self._db_identity: raise EffectError('DB_PATH_REBOUND')
-            self._assert_db_identity()
+            self._assert_db_identity(); _assert_auxiliary_paths_safe(self.db_path)
             con._bind_anchor(fd); anchor_bound=True
-            con.row_factory=sqlite3.Row; con.execute('PRAGMA foreign_keys=ON'); con.execute('PRAGMA busy_timeout=10000'); return con
+            con.row_factory=sqlite3.Row; con.execute('PRAGMA foreign_keys=ON'); con.execute('PRAGMA busy_timeout=10000')
+            _assert_auxiliary_paths_safe(self.db_path)
+            return con
         except Exception:
             if con is not None: con.close()
             raise
