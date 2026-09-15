@@ -162,7 +162,9 @@ class EffectLedger:
     def _init_db(self):
         con=self._connect()
         try:
-            con.execute('PRAGMA journal_mode=WAL')
+            mode_row=con.execute('PRAGMA journal_mode=WAL').fetchone()
+            mode=mode_row[0] if mode_row and len(mode_row)>0 else None
+            if not isinstance(mode,str) or mode.lower()!='wal': raise EffectError('DB_WAL_REQUIRED')
             con.execute("""CREATE TABLE IF NOT EXISTS effects (
             task_id TEXT NOT NULL,effect_id TEXT NOT NULL,operation TEXT NOT NULL,payload_sha256 TEXT NOT NULL,task_sha256 TEXT NOT NULL,
             worker_id TEXT NOT NULL,lease_id TEXT NOT NULL,attempt INTEGER NOT NULL,effect_generation INTEGER NOT NULL,token_hash TEXT NOT NULL,
