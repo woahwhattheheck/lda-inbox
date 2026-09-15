@@ -1,0 +1,138 @@
+name: ZMP K8V2 effect-ledger WAL mode enforcement
+
+on:
+  push:
+    branches:
+      - zmp-k8v2/effect-ledger-wal-mode-enforcement-20260915
+    paths:
+      - .github/workflows/zmp-k8v2-effect-ledger-wal-mode-enforcement.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zmp-k8v2-effect-ledger-wal-mode-enforcement
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: zmp-k8v2/effect-ledger-wal-mode-enforcement-20260915
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify frozen donor bytes and apply exact repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object effect_receipt_ledger.py)" = "93177adbe976b953bda63fef449b8ffba0d90369"
+          test "$(git hash-object tests/test_effect_ledger_sidecar_custody.py)" = "7c9e2206a59f735ef73d9e04e52367d52935420d"
+          python -B - <<'PY'
+          from pathlib import Path
+
+          source = Path('effect_receipt_ledger.py')
+          text = source.read_text(encoding='utf-8')
+          old = "            con.execute('PRAGMA journal_mode=WAL')\n"
+          new = (
+              "            mode_row=con.execute('PRAGMA journal_mode=WAL').fetchone()\n"
+              "            if mode_row is None or len(mode_row)!=1 or type(mode_row[0]) is not str or mode_row[0].lower()!='wal': raise EffectError('DB_WAL_MODE_REQUIRED')\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one WAL setter, found {text.count(old)}')
+          source.write_text(text.replace(old, new), encoding='utf-8')
+
+          tests = Path('tests/test_effect_ledger_sidecar_custody.py')
+          text = tests.read_text(encoding='utf-8')
+          anchor = "    def test_wal_mode_is_preserved(self):\n"
+          insertion = '''    def test_wal_mode_refusal_fails_closed_before_schema(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ledger.sqlite"
+            statements = []
+
+            class FakeResult:
+                def fetchone(self):
+                    return ("delete",)
+
+            class FakeConnection:
+                def execute(self, statement, *args):
+                    statements.append(statement)
+                    if statement == "PRAGMA journal_mode=WAL":
+                        return FakeResult()
+                    return self
+
+                def close(self):
+                    pass
+
+            with mock.patch.object(EffectLedger, "_connect", return_value=FakeConnection()):
+                with self.assertRaisesRegex(EffectError, "DB_WAL_MODE_REQUIRED"):
+                    EffectLedger(path)
+
+            self.assertEqual(statements, ["PRAGMA journal_mode=WAL"])
+
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected exactly one WAL preservation test anchor, found {text.count(anchor)}')
+          tests.write_text(text.replace(anchor, insertion + anchor), encoding='utf-8')
+          PY
+
+      - name: Prove predecessor killer against frozen donor shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "DB_WAL_MODE_REQUIRED" effect_receipt_ledger.py
+          grep -Fq "test_wal_mode_refusal_fails_closed_before_schema" tests/test_effect_ledger_sidecar_custody.py
+          ! grep -Fq "            con.execute('PRAGMA journal_mode=WAL')" effect_receipt_ledger.py
+
+      - name: Syntax
+        run: >-
+          python -m py_compile
+          effect_receipt_common.py
+          effect_receipt_authority.py
+          effect_receipt_io.py
+          effect_receipt_private_file.py
+          effect_receipt_ledger.py
+          effect_receipts.py
+          tests/test_effect_receipts.py
+          tests/test_effect_ledger_path_custody.py
+          tests/test_effect_ledger_sidecar_custody.py
+
+      - name: Focused normal
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: >-
+          python -m unittest -v
+          tests.test_effect_receipts
+          tests.test_effect_ledger_path_custody
+          tests.test_effect_ledger_sidecar_custody
+
+      - name: Focused optimized
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: >-
+          python -O -m unittest -v
+          tests.test_effect_receipts
+          tests.test_effect_ledger_path_custody
+          tests.test_effect_ledger_sidecar_custody
+
+      - name: Publish tested repair bytes and remove one-shot carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+          rm .github/workflows/zmp-k8v2-effect-ledger-wal-mode-enforcement.yml
+          git config user.name "Z-MolybdenumPier-0317-K8V2"
+          git config user.email "tokenjunkielabs@gmail.com"
+          git add effect_receipt_ledger.py tests/test_effect_ledger_sidecar_custody.py .github/workflows/zmp-k8v2-effect-ledger-wal-mode-enforcement.yml
+          git commit -m "fix: require SQLite WAL mode result"
+          git push origin HEAD:zmp-k8v2/effect-ledger-wal-mode-enforcement-20260915
