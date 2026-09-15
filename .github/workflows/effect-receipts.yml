@@ -11,6 +11,7 @@ on:
       - "effect_receipts.py"
       - "EFFECT_RECEIPTS.md"
       - "tests/test_effect_receipts.py"
+      - "tests/test_effect_ledger_path_custody.py"
       - ".github/workflows/effect-receipts.yml"
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - "effect_receipts.py"
       - "EFFECT_RECEIPTS.md"
       - "tests/test_effect_receipts.py"
+      - "tests/test_effect_ledger_path_custody.py"
       - ".github/workflows/effect-receipts.yml"
 
 permissions:
@@ -58,11 +60,18 @@ jobs:
           effect_receipt_ledger.py
           effect_receipts.py
           tests/test_effect_receipts.py
+          tests/test_effect_ledger_path_custody.py
       - name: Focused normal
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: python -m unittest -v tests.test_effect_receipts
+        run: >-
+          python -m unittest -v
+          tests.test_effect_receipts
+          tests.test_effect_ledger_path_custody
       - name: Focused optimized
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: python -O -m unittest -v tests.test_effect_receipts
+        run: >-
+          python -O -m unittest -v
+          tests.test_effect_receipts
+          tests.test_effect_ledger_path_custody
