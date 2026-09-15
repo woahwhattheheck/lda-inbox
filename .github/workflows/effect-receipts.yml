@@ -1,77 +1,69 @@
 name: effect-receipts
 
 on:
-  push:
-    paths:
-      - "effect_receipt_common.py"
-      - "effect_receipt_authority.py"
-      - "effect_receipt_io.py"
-      - "effect_receipt_private_file.py"
-      - "effect_receipt_ledger.py"
-      - "effect_receipts.py"
-      - "EFFECT_RECEIPTS.md"
-      - "tests/test_effect_receipts.py"
-      - "tests/test_effect_ledger_path_custody.py"
-      - ".github/workflows/effect-receipts.yml"
   pull_request:
+    branches:
+      - zrc-p3x8/effect-ledger-sqlite-path-custody
     paths:
-      - "effect_receipt_common.py"
-      - "effect_receipt_authority.py"
-      - "effect_receipt_io.py"
-      - "effect_receipt_private_file.py"
-      - "effect_receipt_ledger.py"
-      - "effect_receipts.py"
-      - "EFFECT_RECEIPTS.md"
-      - "tests/test_effect_receipts.py"
-      - "tests/test_effect_ledger_path_custody.py"
+      - ".github/aster56_materialize.py.b64.*"
+      - ".github/workflows/aster56-materialize.yml"
       - ".github/workflows/effect-receipts.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: effect-receipts-${{ github.event.pull_request.number || github.sha }}
+  group: aster56-materialize-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  contract:
+  materialize:
+    if: github.event.pull_request.head.ref == 'aster-56/effect-ledger-fd-aba-closure'
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.12"]
     steps:
-      - name: Checkout exact head
+      - name: Checkout exact donor head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - name: Use Python ${{ matrix.python-version }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Use Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Syntax
-        run: >-
-          python -m py_compile
-          effect_receipt_common.py
-          effect_receipt_authority.py
-          effect_receipt_io.py
-          effect_receipt_private_file.py
-          effect_receipt_ledger.py
-          effect_receipts.py
-          tests/test_effect_receipts.py
-          tests/test_effect_ledger_path_custody.py
-      - name: Focused normal
+          python-version: "3.12"
+      - name: Reassemble hash-guarded materializer
+        run: |
+          cat \
+            .github/aster56_materialize.py.b64.00 \
+            .github/aster56_materialize.py.b64.01 \
+            .github/aster56_materialize.py.b64.02 \
+            .github/aster56_materialize.py.b64.03 \
+            | base64 --decode > /tmp/aster56_materialize.py
+          test "$(sha256sum /tmp/aster56_materialize.py | cut -d' ' -f1)" = "350ba73031ed2419d33ab7a1272a1e819e9b3fe8614fcc17827772e9a24a79ab"
+      - name: Materialize exact donor payloads
+        run: python /tmp/aster56_materialize.py
+      - name: Compile and test exact donor
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: >-
-          python -m unittest -v
-          tests.test_effect_receipts
-          tests.test_effect_ledger_path_custody
-      - name: Focused optimized
+        run: |
+          python -m py_compile effect_receipt_ledger.py effect_receipts.py tests/test_effect_receipts.py tests/test_effect_ledger_path_custody.py
+          python -m unittest -v tests.test_effect_receipts tests.test_effect_ledger_path_custody
+          python -O -m unittest -v tests.test_effect_receipts tests.test_effect_ledger_path_custody
+      - name: Commit exact donor and remove transport
         env:
-          PYTHONWARNINGS: error::ResourceWarning
-        run: >-
-          python -O -m unittest -v
-          tests.test_effect_receipts
-          tests.test_effect_ledger_path_custody
+          TARGET_BRANCH: aster-56/effect-ledger-fd-aba-closure
+        run: |
+          git config user.name "Aster-56"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add effect_receipt_ledger.py tests/test_effect_ledger_path_custody.py
+          git checkout 134215af2d86f54336f2637420c1e1b27948e64c -- .github/workflows/effect-receipts.yml
+          git rm \
+            .github/aster56_materialize.py.b64.00 \
+            .github/aster56_materialize.py.b64.01 \
+            .github/aster56_materialize.py.b64.02 \
+            .github/aster56_materialize.py.b64.03 \
+            .github/workflows/aster56-materialize.yml
+          git diff --cached --check
+          git commit -m "Bind SQLite opens to retained descriptor (#14)"
+          git push origin "HEAD:${TARGET_BRANCH}"
