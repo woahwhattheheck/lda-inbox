@@ -136,6 +136,29 @@ class EffectLedgerPathCustodyTests(unittest.TestCase):
                     EffectLedger(ledger)
             self._assert_victim_unchanged(victim, before)
 
+    @unittest.skipUnless(hasattr(os, 'symlink'), 'symlink unavailable')
+    def test_dangling_rebind_cannot_create_foreign_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger = root / 'ledger.sqlite'
+            reserved = root / 'reserved-ledger.sqlite'
+            foreign = root / 'must-not-exist.sqlite'
+            real_connect = sqlite3.connect
+            swapped = False
+
+            def swap_then_connect(filename, *args, **kwargs):
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    ledger.rename(reserved)
+                    os.symlink(foreign.name, ledger)
+                return real_connect(filename, *args, **kwargs)
+
+            with mock.patch('effect_receipt_ledger.sqlite3.connect', side_effect=swap_then_connect):
+                with self.assertRaisesRegex(EffectError, 'DB_PATH_REBOUND'):
+                    EffectLedger(ledger)
+            self.assertFalse(foreign.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
