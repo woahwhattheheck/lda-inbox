@@ -101,7 +101,7 @@ class EffectLedgerSidecarCustodyTests(unittest.TestCase):
             ledger = EffectLedger(path)
             victim = self._victim(root)
             alias = Path(str(path) + "-wal")
-            # A closed WAL connection normally removes its transient sidecars.  If a
+            # A closed WAL connection normally removes its transient sidecars. If a
             # platform retains one here, remove only this test-owned generated path
             # before simulating the foreign generation.
             if alias.exists() or alias.is_symlink():
@@ -125,6 +125,36 @@ class EffectLedgerSidecarCustodyTests(unittest.TestCase):
                 self.assertEqual(con.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
             finally:
                 con.close()
+
+    def test_non_wal_effective_mode_fails_before_schema_initialization(self):
+        class _ModeCursor:
+            @staticmethod
+            def fetchone():
+                return ("delete",)
+
+        class _NonWalConnection:
+            def __init__(self):
+                self.statements = []
+                self.closed = False
+
+            def execute(self, statement):
+                self.statements.append(statement)
+                if statement == "PRAGMA journal_mode=WAL":
+                    return _ModeCursor()
+                raise AssertionError("schema initialization must not run without WAL")
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ledger.sqlite"
+            fake = _NonWalConnection()
+            with mock.patch.object(EffectLedger, "_connect", return_value=fake):
+                with self.assertRaisesRegex(EffectError, "DB_WAL_REQUIRED"):
+                    EffectLedger(path)
+
+            self.assertTrue(fake.closed)
+            self.assertEqual(fake.statements, ["PRAGMA journal_mode=WAL"])
 
 
 if __name__ == "__main__":
