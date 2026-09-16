@@ -6,6 +6,30 @@ action. It records one logical effect, publishes a private generation-bound
 token durably, and refuses the `PREPARED -> DISPATCHED` transition unless the
 same lease generation is still live in the repository's canonical `inbox.json`.
 
+## Ledger database custody
+
+The SQLite ledger is persistent effect authority and therefore has the same
+fail-closed pathname posture as the private token surface. The requested ledger
+must live in a private, non-symlink final parent directory. An existing database
+must be a same-owner regular file with exactly one hard link. A new database is
+reserved create-exclusively at mode 0600 before SQLite is allowed to open it.
+Existing safe databases are hardened to 0600 through their verified descriptor.
+
+The ledger records the database device/inode generation and checks the visible
+pathname before and immediately after every SQLite open. SQLite opens the
+already-reserved database with URI `mode=rw`, so a pathname rebound to a dangling
+alias cannot create a new foreign target. If the visible pathname is rebound,
+becomes a symlink/hardlink/non-regular file, or no longer names the retained
+inode, the operation fails closed. Initialization never follows an alias to
+schema-write or chmod a foreign database, and failure cleanup never unlinks or
+replaces a contested successor path.
+
+The final parent is opened without following a final symlink and must not be
+group- or other-writable. The code may create a missing final parent with private
+permissions, but it does not recursively chmod caller-owned directory trees.
+These controls protect ledger-file custody only; they do not expand external
+action authority.
+
 ## Required ordering
 
 1. The task publisher claims a lease through `task_protocol.py`, publishes the
