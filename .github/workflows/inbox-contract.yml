@@ -33,15 +33,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
+      - name: Checkout exact event revision without external actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Verify runner Python
+        run: python3 -c 'import sys; assert sys.version_info >= (3, 10), sys.version'
       - name: Run validator and protocol regressions
-        run: python -m unittest discover -s tests -v
+        run: python3 -m unittest discover -s tests -v
       - name: Validate repository inbox envelope
-        run: python validate_inbox.py inbox.json
+        run: python3 validate_inbox.py inbox.json
       - name: Validate repository execution protocol
-        run: python task_protocol.py validate inbox.json
+        run: python3 task_protocol.py validate inbox.json
