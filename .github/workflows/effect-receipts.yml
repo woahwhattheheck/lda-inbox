@@ -2,6 +2,7 @@ name: effect-receipts
 
 on:
   push:
+    branches: [main]
     paths:
       - "effect_receipt_common.py"
       - "effect_receipt_authority.py"
@@ -10,7 +11,10 @@ on:
       - "effect_receipt_ledger.py"
       - "effect_receipts.py"
       - "EFFECT_RECEIPTS.md"
+      - "EFFECT_LEDGER_SIDECAR_BOUNDARY.md"
       - "tests/test_effect_receipts.py"
+      - "tests/test_effect_ledger_path_custody.py"
+      - "tests/test_effect_ledger_sidecar_custody.py"
       - ".github/workflows/effect-receipts.yml"
   pull_request:
     paths:
@@ -21,7 +25,10 @@ on:
       - "effect_receipt_ledger.py"
       - "effect_receipts.py"
       - "EFFECT_RECEIPTS.md"
+      - "EFFECT_LEDGER_SIDECAR_BOUNDARY.md"
       - "tests/test_effect_receipts.py"
+      - "tests/test_effect_ledger_path_custody.py"
+      - "tests/test_effect_ledger_sidecar_custody.py"
       - ".github/workflows/effect-receipts.yml"
 
 permissions:
@@ -35,34 +42,65 @@ jobs:
   contract:
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.12"]
     steps:
-      - name: Checkout exact head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Use Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python-version }}
+      - name: Checkout exact event revision without external actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Verify runner Python
+        run: python3 -c 'import sys; assert sys.version_info >= (3, 10), sys.version'
       - name: Syntax
-        run: >-
-          python -m py_compile
-          effect_receipt_common.py
-          effect_receipt_authority.py
-          effect_receipt_io.py
-          effect_receipt_private_file.py
-          effect_receipt_ledger.py
-          effect_receipts.py
-          tests/test_effect_receipts.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            effect_receipt_common.py
+            effect_receipt_authority.py
+            effect_receipt_io.py
+            effect_receipt_private_file.py
+            effect_receipt_ledger.py
+            effect_receipts.py
+            tests/test_effect_receipts.py
+          )
+          for candidate in \
+            tests/test_effect_ledger_path_custody.py \
+            tests/test_effect_ledger_sidecar_custody.py
+          do
+            if [[ -f "$candidate" ]]; then
+              files+=("$candidate")
+            fi
+          done
+          python3 -m py_compile "${files[@]}"
       - name: Focused normal
+        shell: bash
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: python -m unittest -v tests.test_effect_receipts
+        run: |
+          set -euo pipefail
+          suites=(tests.test_effect_receipts)
+          if [[ -f tests/test_effect_ledger_path_custody.py ]]; then
+            suites+=(tests.test_effect_ledger_path_custody)
+          fi
+          if [[ -f tests/test_effect_ledger_sidecar_custody.py ]]; then
+            suites+=(tests.test_effect_ledger_sidecar_custody)
+          fi
+          python3 -m unittest -v "${suites[@]}"
       - name: Focused optimized
+        shell: bash
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: python -O -m unittest -v tests.test_effect_receipts
+        run: |
+          set -euo pipefail
+          suites=(tests.test_effect_receipts)
+          if [[ -f tests/test_effect_ledger_path_custody.py ]]; then
+            suites+=(tests.test_effect_ledger_path_custody)
+          fi
+          if [[ -f tests/test_effect_ledger_sidecar_custody.py ]]; then
+            suites+=(tests.test_effect_ledger_sidecar_custody)
+          fi
+          python3 -O -m unittest -v "${suites[@]}"
