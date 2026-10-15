@@ -57,3 +57,19 @@ can cause a later generation to retry. Side-effecting commands need their own
 idempotency key/provider receipt or a human approval boundary.
 
 See [TASK_PROTOCOL.md](TASK_PROTOCOL.md) for the state machine and CLI examples.
+
+### Deterministic offline walkthrough
+
+Run the maintained end-to-end example without a phone, provider, repository
+write, or external side effect:
+
+```sh
+python lease_cas_demo.py
+```
+
+The JSON transcript binds every staged transition to the semantic document
+SHA-256. It demonstrates an initial claim, an unchanged idempotent replay, a
+renewal, an explicit release and handoff to a second worker, rejection of the
+first worker's stale generation, and completion by the new authority. The demo
+uses fixed timestamps and identifiers, so repeated runs produce byte-identical
+output.
