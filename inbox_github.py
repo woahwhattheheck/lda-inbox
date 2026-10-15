@@ -126,7 +126,7 @@ class Target:
                     or any(ord(c) < 32 or ord(c) == 127 for c in value)
                     or "\\" in value):
                 raise InboxGitHubError(f"invalid {name}")
-        if (".." in self.branch or "@{" in self.branch
+        if (self.branch == "@" or ".." in self.branch or "@{" in self.branch
                 or any(c in self.branch for c in " ~^:?*[")
                 or any(p.startswith(".") or p.endswith(".") or p.endswith(".lock")
                        for p in self.branch.split("/"))):
