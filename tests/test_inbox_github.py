@@ -229,6 +229,45 @@ class InboxGitHubTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(output.getvalue()), result)
 
+    def test_offline_reconciliation_classifies_without_private_values(self):
+        transport, coordinator, request = self.operation()
+        base = coordinator.reconcile_local(request, copy.deepcopy(BEFORE))
+        applied = coordinator.reconcile_local(request, copy.deepcopy(AFTER))
+        changed = copy.deepcopy(BEFORE)
+        changed["tasks"].append({"id": "other", "kind": "run_task", "done": False})
+        diverged = coordinator.reconcile_local(request, changed)
+        self.assertEqual(
+            [base["status"], applied["status"], diverged["status"]],
+            ["base_equivalent", "already_applied", "diverged"],
+        )
+        self.assertTrue(base["matches_expected_base"])
+        self.assertTrue(applied["matches_proposed_task"])
+        self.assertFalse(diverged["matches_expected_base"])
+        for result in (base, applied, diverged):
+            self.assertFalse(result["provider_contacted"])
+            self.assertFalse(result["publication_attempted"])
+            self.assertFalse(result["publication_ready"])
+            self.assertFalse(result["authority_active"])
+            self.assertFalse(result["executes_task"])
+            visible = client.json_bytes(result).decode("utf-8")
+            for private in ("worker-a", "lease-a", request["original_base64"],
+                            request["proposed"]):
+                self.assertNotIn(private, visible)
+
+    def test_reconcile_local_cli_needs_no_token_or_provider_transport(self):
+        result = {"v": 1, "status": "base_equivalent", "provider_contacted": False}
+        output = io.StringIO()
+        with patch.object(client, "load_private_file", return_value={"retained": True}), \
+                patch("task_protocol.parse_protocol_path", return_value=BEFORE), \
+                patch.object(client.Coordinator, "reconcile_local", return_value=result), \
+                patch.object(client, "GitHubInbox", side_effect=AssertionError("network transport")), \
+                patch.dict(client.os.environ, {}, clear=True), contextlib.redirect_stdout(output):
+            status = client.main(["--repo", "example/inbox", "reconcile-local",
+                                  "--request", "/private/request.json",
+                                  "--inbox", "/offline/inbox.json"])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(output.getvalue()), result)
+
 
 if __name__ == "__main__":
     unittest.main()

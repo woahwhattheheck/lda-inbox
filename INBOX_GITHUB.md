@@ -37,6 +37,27 @@ source or result text. `provider_contacted`, `publication_attempted`, and
 `executes_task` are always false in an inspection result. Inspection does not
 establish a live lease or publish the transition.
 
+Reconcile that validated request against one stable local inbox snapshot when
+the provider route is unavailable or intentionally not in use:
+
+```sh
+python inbox_github.py --repo OWNER/REPOSITORY reconcile-local \
+  --request /private/worker/claim-001.json \
+  --inbox /offline/current-inbox.json
+```
+
+The command classifies the local snapshot as `base_equivalent`,
+`already_applied`, or `diverged`. It prints only document/request fingerprints
+and booleans; task command/result text, worker ID, lease ID, and retained source
+documents remain omitted. The inbox path is read through the protocol's stable
+regular-file reader, including final visible-path and generation checks.
+
+Local equivalence does not prove the current provider branch head, make a
+request publication-ready, or establish live task authority. Accordingly,
+`provider_contacted`, `publication_attempted`, `publication_ready`,
+`authority_active`, and `executes_task` are always false. Use `resume` for the
+fresh provider read and exact expected-head publication/reconciliation step.
+
 ```sh
 python inbox_github.py --repo OWNER/REPOSITORY claim \
   --request /private/worker/claim-001.json \
