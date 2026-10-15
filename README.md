@@ -100,3 +100,22 @@ Run `python effect_receipts.py --db effects.sqlite audit --inbox inbox.json`
 to obtain a deterministic public-only cross-store report. The audit identifies
 orphan, binding-mismatch, unresolved, terminal, and completed-with-unresolved
 conditions without authorizing completion or exposing private token material.
+
+### Portable offline audit bundle
+
+Create a deterministic, public-only handoff envelope from the same read-only
+snapshot, then verify its structure, findings, counts, and SHA-256 manifest
+without reopening either source store:
+
+```sh
+python effect_audit_bundle.py create --inbox inbox.json --db effects.sqlite > audit-bundle.json
+python effect_audit_bundle.py verify < audit-bundle.json
+```
+
+The bundle retains only canonical task IDs/digests/completion flags, a redacted
+effect projection, and the portable audit report. It excludes task commands,
+lease and worker identifiers, receipt references, token hashes, token paths,
+and other private ledger fields.
+Its hashes provide internal tamper detection, not a signature or proof of source
+authenticity. A valid bundle does not authorize task completion, effect retry,
+provider action, payment, delivery, or revenue recognition.
