@@ -361,6 +361,39 @@ class Coordinator:
         return (self.protocol.parse_protocol_text(original.decode("utf-8")),
                 self.protocol.parse_protocol_text(request["proposed"]))
 
+    def inspect(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Validate a retained request and return a redacted offline summary."""
+        _, proposed = self.validate_request(request)
+        selected = request["arguments"]["task_id"]
+        execution = task(proposed, selected).get("execution") or {}
+        if not isinstance(execution, dict):
+            raise InboxGitHubError("proposed execution must be an object")
+        public_execution = {
+            key: execution[key]
+            for key in ("state", "attempt", "lease_expires_at")
+            if key in execution
+        }
+        return {
+            "v": 1,
+            "status": "valid",
+            "request_id": request["request_id"],
+            "request_sha256": hashlib.sha256(json_bytes(request)).hexdigest(),
+            "target": request["target"],
+            "action": request["action"],
+            "task_id": selected,
+            "head": request["head"],
+            "blob": request["blob"],
+            "expected_document_sha256": request["arguments"]["expected_document_sha256"],
+            "proposed_document_sha256": self.protocol.document_sha256(proposed),
+            "transition_sha256": hashlib.sha256(
+                json_bytes(request["transition"])).hexdigest(),
+            "requested_at": request["arguments"]["now"],
+            "proposed_execution": public_execution,
+            "provider_contacted": False,
+            "publication_attempted": False,
+            "executes_task": False,
+        }
+
     def _live_before_write(self, request: dict, before: dict, after: dict) -> None:
         now = self.clock()
         if now.tzinfo is None:
@@ -442,6 +475,9 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--token-env", default="GH_TOKEN", help="token environment variable name")
     sub = root.add_subparsers(dest="action", required=True)
     sub.add_parser("read", help="read the current pinned document and lease summary")
+    inspect = sub.add_parser(
+        "inspect", help="validate and summarize a retained request without network access")
+    inspect.add_argument("--request", type=Path, required=True)
     resume = sub.add_parser("resume", help="reconcile/retry the exact retained request")
     resume.add_argument("--request", type=Path, required=True)
     for action in ACTIONS:
@@ -468,10 +504,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         import task_protocol as protocol
+        target = Target(args.repo, args.branch, args.path)
+        if args.action == "inspect":
+            # Inspection binds to the exact CLI target but deliberately does not
+            # load a token or construct a provider transport.
+            target_only = type("TargetOnly", (), {"target": target})()
+            result = Coordinator(target_only, protocol).inspect(
+                load_private_file(args.request))
+            sys.stdout.write(json_bytes(result).decode("utf-8"))
+            return 0
         token = os.environ.get(args.token_env, "")
         if not token and args.token_env == "GH_TOKEN":
             token = os.environ.get("GITHUB_TOKEN", "")
-        transport = GitHubInbox(Target(args.repo, args.branch, args.path), token)
+        transport = GitHubInbox(target, token)
         coordinator = Coordinator(transport, protocol)
         if args.action == "read":
             snapshot = transport.read()

@@ -20,6 +20,23 @@ is written and synchronized before the provider mutation. Use a private local
 directory that already exists; keep request files with the worker's operational
 state, outside the repository.
 
+Inspect an existing request locally before resuming it. This command loads no
+token and makes no provider request. It reconstructs the protocol transition and
+prints a redacted identity/fingerprint summary; it omits the original and
+proposed documents, task result, worker ID and lease ID.
+
+```sh
+python inbox_github.py --repo OWNER/REPOSITORY inspect \
+  --request /private/worker/claim-001.json
+```
+
+The CLI repository, branch and path must match the request's retained target.
+`request_sha256` identifies the canonical request object, while the document and
+transition digests identify its reconstructed state without displaying private
+source or result text. `provider_contacted`, `publication_attempted`, and
+`executes_task` are always false in an inspection result. Inspection does not
+establish a live lease or publish the transition.
+
 ```sh
 python inbox_github.py --repo OWNER/REPOSITORY claim \
   --request /private/worker/claim-001.json \

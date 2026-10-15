@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import inbox_github as client
 
@@ -193,6 +193,41 @@ class InboxGitHubTests(unittest.TestCase):
             client.main(["--help"])
         self.assertEqual(exit_result.exception.code, 0)
         self.assertIn("claim,renew,release,complete", output.getvalue())
+
+    def test_offline_inspection_validates_and_redacts_request(self):
+        transport, coordinator, request = self.operation()
+        summary = coordinator.inspect(request)
+        self.assertEqual(summary["status"], "valid")
+        self.assertEqual(summary["request_id"], request["request_id"])
+        self.assertEqual(summary["task_id"], "transport-case")
+        self.assertEqual(summary["head"], HEAD)
+        self.assertEqual(summary["proposed_execution"], {
+            "state": "leased", "attempt": 1,
+            "lease_expires_at": "2026-10-15T20:02:00Z",
+        })
+        self.assertFalse(summary["provider_contacted"])
+        self.assertFalse(summary["publication_attempted"])
+        self.assertFalse(summary["executes_task"])
+        visible = client.json_bytes(summary).decode("utf-8")
+        for private in ("worker-a", "lease-a", request["original_base64"],
+                        request["proposed"]):
+            self.assertNotIn(private, visible)
+        changed = copy.deepcopy(request)
+        changed["proposed"] += " "
+        with self.assertRaises(client.InboxGitHubError):
+            coordinator.inspect(changed)
+
+    def test_inspect_cli_needs_no_token_or_provider_transport(self):
+        result = {"v": 1, "status": "valid", "provider_contacted": False}
+        output = io.StringIO()
+        with patch.object(client, "load_private_file", return_value={"retained": True}), \
+                patch.object(client.Coordinator, "inspect", return_value=result), \
+                patch.object(client, "GitHubInbox", side_effect=AssertionError("network transport")), \
+                patch.dict(client.os.environ, {}, clear=True), contextlib.redirect_stdout(output):
+            status = client.main(["--repo", "example/inbox", "inspect",
+                                  "--request", "/private/request.json"])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(output.getvalue()), result)
 
 
 if __name__ == "__main__":
