@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Optional
 from effect_receipt_common import EffectError
 from effect_receipt_ledger import EffectLedger
+from effect_receipt_audit import audit_paths
 from effect_receipt_io import load_payload_file,normalized_token_path,read_token_file,token_path_missing,write_token_file
+from task_protocol import TaskProtocolError
 __all__=['EffectError','EffectLedger','read_token_file','write_token_file']
 def _print(obj):print(json.dumps(obj,sort_keys=True,separators=(',',':')))
 def _prepare_auth_args(p):
@@ -24,8 +26,10 @@ def main(argv:Optional[list[str]]=None)->int:
     for name in ('succeed','fail-final'):
         q=sub.add_parser(name);q.add_argument('--token-file',required=True);q.add_argument('--receipt-ref',required=True);q.add_argument('--receipt-sha256',required=True)
     i=sub.add_parser('inspect');i.add_argument('--task-id',required=True);i.add_argument('--effect-id',required=True)
+    a=sub.add_parser('audit');a.add_argument('--inbox',required=True,type=Path)
     args=parser.parse_args(argv)
     try:
+        if args.command=='audit':_print(audit_paths(inbox_path=args.inbox,db_path=Path(args.db)));return 0
         ledger=EffectLedger(args.db)
         if args.command=='prepare':
             path=Path(args.token_out);token_path=normalized_token_path(path)
@@ -45,6 +49,6 @@ def main(argv:Optional[list[str]]=None)->int:
         if args.command in ('succeed','fail-final'):
             record=read_token_file(Path(args.token_file));_print(ledger.record_outcome(task_id=record['task_id'],effect_id=record['effect_id'],token_record=record,kind='SUCCEEDED' if args.command=='succeed' else 'FAILED_FINAL',receipt_ref=args.receipt_ref,receipt_sha256=args.receipt_sha256));return 0
         _print(ledger.inspect(task_id=args.task_id,effect_id=args.effect_id));return 0
-    except (EffectError,OSError) as exc:
+    except (EffectError,TaskProtocolError,OSError) as exc:
         print(json.dumps({'ok':False,'error':str(exc)},sort_keys=True,separators=(',',':')),file=sys.stderr);return 2
 if __name__=='__main__':raise SystemExit(main())

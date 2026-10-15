@@ -93,3 +93,10 @@ does not claim provider delivery, payment, revenue, or any real external
 effect. Private token material and temporary filesystem paths never appear in
 the transcript. Fixed timestamps and identifiers make repeated runs
 byte-identical.
+
+### Audit inbox completion against effect state
+
+Run `python effect_receipts.py --db effects.sqlite audit --inbox inbox.json`
+to obtain a deterministic public-only cross-store report. The audit identifies
+orphan, binding-mismatch, unresolved, terminal, and completed-with-unresolved
+conditions without authorizing completion or exposing private token material.

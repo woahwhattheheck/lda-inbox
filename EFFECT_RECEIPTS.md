@@ -1,5 +1,21 @@
 # External-effect receipt ledger
 
+## Read-only task/effect audit
+
+`effect_receipts.py --db effects.sqlite audit --inbox inbox.json` emits a
+deterministic, ordered reconciliation of validated inbox tasks and the public
+effect-ledger projection. It reports orphan effects, immutable task-binding
+mismatches, unresolved effects, and the especially unsafe combination of a
+completed task with an unresolved effect.
+
+The audit validates the inbox before opening an existing ledger through a
+read-only descriptor; it never creates or initializes a database. It never
+mutates task or effect state and always returns
+`authorizes_completion:false`. A terminal ledger row remains local evidence
+only: the report does not prove provider authenticity, payment, delivery, or
+that an external action occurred. Private effect tokens, token hashes, and
+token paths are never projected.
+
 `effect_receipts.py` is a fail-closed duplicate-action barrier downstream of the
 repository-backed task lease protocol. It does **not** perform the external
 action. It records one logical effect, publishes a private generation-bound
