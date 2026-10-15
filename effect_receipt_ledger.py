@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib, os, secrets, sqlite3, stat
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from effect_receipt_authority import require_live_lease, require_live_lease_current
 from effect_receipt_common import (EffectError, canonical_payload, public_row, token_hash, validate_attempt, validate_id, validate_receipt_ref, validate_sha, validate_token_path)
 
@@ -36,6 +36,22 @@ def _assert_auxiliary_paths_safe(db_path:Union[os.PathLike,str])->None:
             if info.st_mode&(stat.S_IRWXG|stat.S_IRWXO): raise EffectError('DB_AUXILIARY_PATH_UNSAFE')
         except EffectError as exc:
             raise EffectError('DB_AUXILIARY_PATH_UNSAFE') from exc
+
+
+def _assert_no_auxiliary_paths_present(db_path:Union[os.PathLike,str])->None:
+    if any(Path(os.fspath(db_path)+suffix).exists() for suffix in _AUXILIARY_SUFFIXES):
+        raise EffectError('AUDIT_DB_HAS_SIDECAR')
+
+
+def _fd_fingerprint(fd:int)->Tuple[Tuple[int,...],str]:
+    info=os.fstat(fd);_safe_file_info(info)
+    digest=hashlib.sha256();offset=0
+    while offset<info.st_size:
+        chunk=os.pread(fd,min(1024*1024,info.st_size-offset),offset)
+        if not chunk: raise EffectError('AUDIT_DB_CHANGED_DURING_READ')
+        digest.update(chunk);offset+=len(chunk)
+    fields=(info.st_dev,info.st_ino,info.st_mode,info.st_nlink,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    return fields,digest.hexdigest()
 
 
 def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]:
@@ -89,7 +105,7 @@ def _prepare_db_path(db_path:Union[os.PathLike,str])->Tuple[Path,Tuple[int,int]]
         except OSError: pass
 
 
-def _descriptor_db_uri(fd:int,identity:Tuple[int,int])->str:
+def _descriptor_db_uri(fd:int,identity:Tuple[int,int],*,mode:str='rw',immutable:bool=False)->str:
     """Return a verified path that opens the retained file generation."""
     for root in (Path('/proc/self/fd'),Path('/dev/fd')):
         anchor=root/str(fd)
@@ -98,14 +114,15 @@ def _descriptor_db_uri(fd:int,identity:Tuple[int,int])->str:
         try: _safe_file_info(info)
         except EffectError: continue
         if (info.st_dev,info.st_ino)==identity:
-            return anchor.as_uri()+'?mode=rw'
+            suffix='&immutable=1' if immutable else ''
+            return anchor.as_uri()+f'?mode={mode}{suffix}'
     raise EffectError('DB_DESCRIPTOR_PATH_UNAVAILABLE')
 
 
 class _DescriptorBoundConnection(sqlite3.Connection):
     """Keep the descriptor anchor alive for the SQLite connection lifetime."""
-    def _bind_anchor(self,fd:int)->None:
-        self._db_anchor=os.fdopen(fd,'rb+',closefd=True)
+    def _bind_anchor(self,fd:int,mode:str='rb+')->None:
+        self._db_anchor=os.fdopen(fd,mode,closefd=True)
     def close(self)->None:
         try: super().close()
         finally:
@@ -281,8 +298,74 @@ class EffectLedger:
             return public_row(self._row(con,validate_id('task_id',task_id),validate_id('effect_id',effect_id)))
         finally:
             con.close()
+    def list_effects(self)->List[Dict[str,Any]]:
+        """Return one ordered, public-only snapshot of every effect row."""
+        con=self._connect()
+        try:
+            con.execute('BEGIN')
+            rows=con.execute(
+                'SELECT * FROM effects ORDER BY task_id ASC,effect_id ASC'
+            ).fetchall()
+            snapshot=[public_row(row) for row in rows]
+            con.rollback()
+            return snapshot
+        except Exception:
+            if con.in_transaction: con.rollback()
+            raise
+        finally:
+            con.close()
     @staticmethod
     def _row(con,task_id,effect_id):
         row=con.execute('SELECT * FROM effects WHERE task_id=? AND effect_id=?',(task_id,effect_id)).fetchone()
         if row is None: raise EffectError('EFFECT_NOT_FOUND')
         return row
+
+
+def read_effects_snapshot(db_path:Union[os.PathLike,str])->List[Dict[str,Any]]:
+    """Read an existing ledger without creating, chmodding, or initializing it."""
+    path=Path(db_path)
+    if str(path)==':memory:': raise EffectError('PERSISTENT_DB_REQUIRED')
+    try: visible=os.lstat(path)
+    except FileNotFoundError as exc: raise EffectError('AUDIT_DB_NOT_FOUND') from exc
+    except OSError as exc: raise EffectError('DB_PATH_STAT_FAILED') from exc
+    _safe_file_info(visible)
+    if visible.st_mode&(stat.S_IRWXG|stat.S_IRWXO): raise EffectError('DB_PATH_UNSAFE')
+    _assert_auxiliary_paths_safe(path)
+    _assert_no_auxiliary_paths_present(path)
+    flags=os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)
+    try: fd=os.open(path,flags)
+    except OSError as exc: raise EffectError('DB_OPEN_FAILED') from exc
+    con=None;anchor_bound=False
+    identity=(visible.st_dev,visible.st_ino)
+    try:
+        opened=os.fstat(fd);_safe_file_info(opened)
+        if (opened.st_dev,opened.st_ino)!=identity: raise EffectError('DB_PATH_REBOUND')
+        before_fingerprint=_fd_fingerprint(fd)
+        uri=_descriptor_db_uri(fd,identity,mode='ro',immutable=True)
+        try: con=sqlite3.connect(uri,timeout=10.0,isolation_level=None,uri=True,factory=_DescriptorBoundConnection)
+        except sqlite3.Error as exc: raise EffectError('AUDIT_DB_OPEN_FAILED') from exc
+        con._bind_anchor(fd,'rb');anchor_bound=True;con.row_factory=sqlite3.Row
+        try:
+            con.execute('PRAGMA query_only=ON')
+            row=con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='effects'").fetchone()
+            if row is None: raise EffectError('AUDIT_EFFECTS_TABLE_MISSING')
+            con.execute('BEGIN')
+            rows=con.execute('SELECT * FROM effects ORDER BY task_id ASC,effect_id ASC').fetchall()
+            snapshot=[public_row(item) for item in rows]
+            con.rollback()
+        except sqlite3.Error as exc:
+            raise EffectError('AUDIT_DB_READ_FAILED') from exc
+        after=os.fstat(con._db_anchor.fileno());_safe_file_info(after)
+        if (after.st_dev,after.st_ino)!=identity: raise EffectError('DB_PATH_REBOUND')
+        final=os.lstat(path);_safe_file_info(final)
+        if (final.st_dev,final.st_ino)!=identity: raise EffectError('DB_PATH_REBOUND')
+        _assert_auxiliary_paths_safe(path)
+        _assert_no_auxiliary_paths_present(path)
+        if _fd_fingerprint(con._db_anchor.fileno())!=before_fingerprint:
+            raise EffectError('AUDIT_DB_CHANGED_DURING_READ')
+        return snapshot
+    finally:
+        if con is not None: con.close()
+        elif not anchor_bound:
+            try: os.close(fd)
+            except OSError: pass
