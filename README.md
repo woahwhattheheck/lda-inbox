@@ -73,3 +73,23 @@ renewal, an explicit release and handoff to a second worker, rejection of the
 first worker's stale generation, and completion by the new authority. The demo
 uses fixed timestamps and identifiers, so repeated runs produce byte-identical
 output.
+
+### Offline external-effect reconciliation walkthrough
+
+Run the maintained lease-to-effect safety course without a phone, provider,
+mailbox, payment processor, repository write, or external side effect:
+
+```sh
+python effect_receipt_demo.py
+```
+
+The redacted JSON transcript exercises the persistent receipt ledger from
+`TOKEN_PENDING` through `PREPARED` and a `DISPATCHED` marker. It then proves
+that an exact duplicate and a later lease generation cannot retry while the
+outcome is unknown, that reopening SQLite preserves
+`RECONCILIATION_REQUIRED`, and that only an exact bound receipt resolves the
+hold. The final receipt is explicitly synthetic and records `FAILED_FINAL`; it
+does not claim provider delivery, payment, revenue, or any real external
+effect. Private token material and temporary filesystem paths never appear in
+the transcript. Fixed timestamps and identifiers make repeated runs
+byte-identical.
