@@ -78,6 +78,15 @@ class InboxGitHubTests(unittest.TestCase):
         request = coordinator.prepare(transport.current, "claim", ARGS)
         return transport, coordinator, request
 
+    def test_target_rejects_noncanonical_branch_components(self):
+        for branch in (".hidden", "team/.hidden", "release.",
+                       "team/release./next", "main\x7f"):
+            with self.subTest(branch=repr(branch)), self.assertRaisesRegex(
+                    client.InboxGitHubError, "invalid branch"):
+                client.Target("example/inbox", branch)
+        self.assertEqual(client.Target("example/inbox", "release/next").branch,
+                         "release/next")
+
     def test_immutable_tree_blob_read_and_cache(self):
         raw = client.json_bytes(BEFORE)
         blob = client.blob_oid(raw)

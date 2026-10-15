@@ -123,12 +123,13 @@ class Target:
             if (not isinstance(value, str) or not value or value != value.strip()
                     or value.startswith("/") or value.endswith("/")
                     or any(part in ("", ".", "..") for part in value.split("/"))
-                    or any(ord(c) < 32 for c in value) or "\\" in value):
+                    or any(ord(c) < 32 or ord(c) == 127 for c in value)
+                    or "\\" in value):
                 raise InboxGitHubError(f"invalid {name}")
         if (".." in self.branch or "@{" in self.branch
                 or any(c in self.branch for c in " ~^:?*[")
-                or any(p.startswith(".") or p.endswith(".lock") for p in self.branch.split("/"))
-                or self.branch.endswith(".")):
+                or any(p.startswith(".") or p.endswith(".") or p.endswith(".lock")
+                       for p in self.branch.split("/"))):
             raise InboxGitHubError("invalid branch name")
 
     def as_dict(self) -> dict[str, str]:
