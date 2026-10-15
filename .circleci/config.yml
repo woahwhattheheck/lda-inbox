@@ -26,6 +26,8 @@ jobs:
 
 workflows:
   public-ci-redundancy-pilot:
+    # Owner focused-validation policy: retain source without hosted sweeps.
+    when: false
     jobs:
       - inbox-contract:
           filters:

@@ -7,7 +7,6 @@ Repository-backed task inbox for the LocalDeviceAgent phone agent.
 ```sh
 python validate_inbox.py inbox.json
 python task_protocol.py validate inbox.json
-python -m unittest discover -s tests -v
 ```
 
 The base version-1 inbox validator fail-closes malformed JSON, duplicate IDs,
@@ -119,3 +118,20 @@ and other private ledger fields.
 Its hashes provide internal tamper detection, not a signature or proof of source
 authenticity. A valid bundle does not authorize task completion, effect retry,
 provider action, payment, delivery, or revenue recognition.
+
+## Publish task transitions to GitHub
+
+`inbox_github.py` completes the existing protocol's repository-publication arm:
+read an immutable inbox snapshot, retain a private operation request, publish
+with GitHub `expectedHeadOid`, and reread the current task authority. It supports
+claim, renew, release, completion and recovery of the exact original request.
+An expired recovered claim remains the original generation. Unchanged snapshots
+reuse their verified content after a fresh branch-ref read.
+
+See [INBOX_GITHUB.md](INBOX_GITHUB.md) for the complete command-line workflow,
+recovery outcomes and token-environment configuration.
+
+Broad hosted regression jobs are disabled in the retained GitHub and CircleCI
+configuration under the owner's focused-validation policy. Source and historical
+courses remain available. Run only the specific relevant check for changed work;
+the publisher's focused command is documented in its guide.
