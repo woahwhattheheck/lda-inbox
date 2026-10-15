@@ -119,6 +119,12 @@ Its hashes provide internal tamper detection, not a signature or proof of source
 authenticity. A valid bundle does not authorize task completion, effect retry,
 provider action, payment, delivery, or revenue recognition.
 
+`effect_audit_chain.py` retains a deterministic, hash-linked sequence of those
+verified portable bundles. It detects changed, duplicated, reordered, or
+silently removed entries relative to a retained chain and verifies strict
+append-only extensions. See [AUDIT_CHAIN.md](AUDIT_CHAIN.md). The chain remains
+an offline self-integrity artifact and does not expand the bundle's authority.
+
 ## Publish task transitions to GitHub
 
 `inbox_github.py` completes the existing protocol's repository-publication arm:
