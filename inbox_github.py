@@ -394,6 +394,49 @@ class Coordinator:
             "executes_task": False,
         }
 
+    def reconcile_local(self, request: dict[str, Any],
+                        current: dict[str, Any]) -> dict[str, Any]:
+        """Classify one stable local inbox against a retained request.
+
+        This deliberately does not infer a provider head, publication readiness,
+        or live lease authority from local bytes.
+        """
+        before, proposed = self.validate_request(request)
+        self.protocol.validate_protocol_document(current)
+        selected = request["arguments"]["task_id"]
+        wanted = task(proposed, selected)
+        current_row = next(
+            (row for row in current["tasks"] if row["id"] == selected), None)
+        current_digest = self.protocol.document_sha256(current)
+        expected_digest = self.protocol.document_sha256(before)
+        if current_row == wanted:
+            status = "already_applied"
+        elif current_digest == expected_digest:
+            status = "base_equivalent"
+        else:
+            status = "diverged"
+        return {
+            "v": 1,
+            "status": status,
+            "request_id": request["request_id"],
+            "request_sha256": hashlib.sha256(json_bytes(request)).hexdigest(),
+            "target": request["target"],
+            "action": request["action"],
+            "task_id": selected,
+            "expected_document_sha256": expected_digest,
+            "proposed_document_sha256": self.protocol.document_sha256(proposed),
+            "current_document_sha256": current_digest,
+            "task_present": current_row is not None,
+            "matches_expected_base": current_digest == expected_digest,
+            "matches_proposed_task": current_row == wanted,
+            "source": "stable_local_file",
+            "provider_contacted": False,
+            "publication_attempted": False,
+            "publication_ready": False,
+            "authority_active": False,
+            "executes_task": False,
+        }
+
     def _live_before_write(self, request: dict, before: dict, after: dict) -> None:
         now = self.clock()
         if now.tzinfo is None:
@@ -478,6 +521,11 @@ def parser() -> argparse.ArgumentParser:
     inspect = sub.add_parser(
         "inspect", help="validate and summarize a retained request without network access")
     inspect.add_argument("--request", type=Path, required=True)
+    reconcile = sub.add_parser(
+        "reconcile-local",
+        help="compare a retained request with one stable local inbox without network access")
+    reconcile.add_argument("--request", type=Path, required=True)
+    reconcile.add_argument("--inbox", type=Path, required=True)
     resume = sub.add_parser("resume", help="reconcile/retry the exact retained request")
     resume.add_argument("--request", type=Path, required=True)
     for action in ACTIONS:
@@ -505,12 +553,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         import task_protocol as protocol
         target = Target(args.repo, args.branch, args.path)
-        if args.action == "inspect":
-            # Inspection binds to the exact CLI target but deliberately does not
-            # load a token or construct a provider transport.
+        if args.action in ("inspect", "reconcile-local"):
+            # Offline commands bind to the exact CLI target but deliberately do
+            # not load a token or construct a provider transport.
             target_only = type("TargetOnly", (), {"target": target})()
-            result = Coordinator(target_only, protocol).inspect(
-                load_private_file(args.request))
+            coordinator = Coordinator(target_only, protocol)
+            request = load_private_file(args.request)
+            if args.action == "inspect":
+                result = coordinator.inspect(request)
+            else:
+                result = coordinator.reconcile_local(
+                    request, protocol.parse_protocol_path(args.inbox))
             sys.stdout.write(json_bytes(result).decode("utf-8"))
             return 0
         token = os.environ.get(args.token_env, "")
