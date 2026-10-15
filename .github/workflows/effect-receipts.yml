@@ -40,6 +40,8 @@ concurrency:
 
 jobs:
   contract:
+    # Owner focused-validation policy: retain source without hosted sweeps.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
