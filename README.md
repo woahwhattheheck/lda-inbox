@@ -17,6 +17,10 @@ recoverable requests, and complete current/original/historical JSON downloads.
 It reuses the maintained protocol and stages local candidates for the existing
 publication workflow. See [OPERATOR_DESK.md](OPERATOR_DESK.md).
 
+For a complete desk backup, including every workspace and retained request, see
+[WORKSPACE_ARCHIVE.md](WORKSPACE_ARCHIVE.md). Its backup, inspect and restore
+commands preserve the full database and restore only to a new chosen path.
+
 ## Validate
 
 ```sh
