@@ -104,6 +104,24 @@ copying commands, metadata, results, worker IDs, or lease IDs into its output.
 It performs no provider/device action and grants no lease authority. See
 [WORKER_PLAN.md](WORKER_PLAN.md).
 
+### Offline retained-history handoff
+
+Compose the retained-history audit and the latest worker plan into one
+digest-linked, redacted envelope:
+
+```sh
+python inbox_handoff.py snapshot-001.json snapshot-002.json \
+  --now 2026-10-16T01:00:00Z \
+  --worker-id phone-a \
+  --lease-id lease-a
+```
+
+The handoff requires an ordered retained sequence, verifies that the audit and
+plan bind the same latest document, and emits a canonical envelope digest. It
+copies no commands, metadata, results, source paths, worker IDs, or lease IDs,
+and grants no protocol or provider authority. See
+[INBOX_HANDOFF.md](INBOX_HANDOFF.md).
+
 ### Deterministic offline walkthrough
 
 Run the maintained end-to-end example without a phone, provider, repository
