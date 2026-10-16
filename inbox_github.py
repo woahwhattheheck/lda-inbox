@@ -296,13 +296,47 @@ def create_private_file(path: Path, raw: bytes) -> None:
 
 
 def load_private_file(path: Path) -> dict[str, Any]:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
-    with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+    """Decode only one observed, unchanged generation of the retained request."""
+    fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size",
+              "st_mtime_ns", "st_ctime_ns")
+
+    def generation(info: os.stat_result) -> tuple:
+        if (not stat.S_ISREG(info.st_mode) or not info.st_ino
+                or info.st_size > MAX_BYTES):
             raise InboxGitHubError("request must be a bounded regular file")
-        raw = handle.read(MAX_BYTES + 1)
+        return tuple(getattr(info, field) for field in fields)
+
+    try:
+        expected = generation(path.lstat())
+        flags = os.O_RDONLY
+        for flag in ("O_BINARY", "O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+            flags |= getattr(os, flag, 0)
+        fd = os.open(path, flags)
+        try:
+            opened = os.fstat(fd)
+            if generation(opened) != expected:
+                raise InboxGitHubError("request file changed while opening")
+            chunks = []
+            remaining = MAX_BYTES + 1
+            while remaining:
+                chunk = os.read(fd, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_BYTES or len(raw) != opened.st_size:
+                raise InboxGitHubError("request byte count changed while reading")
+            # Compare the descriptor on both sides of the final pathname read.
+            # This catches same-inode edits during that pathname observation too.
+            if (generation(os.fstat(fd)) != expected
+                    or generation(path.lstat()) != expected
+                    or generation(os.fstat(fd)) != expected):
+                raise InboxGitHubError("request file changed while reading")
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise InboxGitHubError("unable to read retained request file") from exc
     return decode_json(raw)
 
 

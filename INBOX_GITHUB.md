@@ -125,6 +125,13 @@ successful HTTP response as current task authority.
 
 A retained request includes task source and result data, but never the token.
 The create-only file operation does not overwrite existing worker state.
+Every retained-request read (`inspect`, `reconcile-local`, and `resume`) requires
+one bounded regular-file generation. The loader compares the initial pathname,
+opened descriptor, final pathname and final descriptor before decoding; observed
+replacement, in-place mutation, size changes, symlinks and nonregular files fail
+closed. These are finite observations, not a guarantee that the namespace cannot
+change after the read returns. A rejected read never reaches request inspection
+or publication; retain the original file and reconcile its custody before retrying.
 Redirects are not followed with credentials. HTTP 401, 403 and 429 end the
 operation without retries; request ID and Retry-After are included when returned.
 The client does not modify repository permissions or workflow settings.
