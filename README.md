@@ -21,6 +21,10 @@ For a complete desk backup, including every workspace and retained request, see
 [WORKSPACE_ARCHIVE.md](WORKSPACE_ARCHIVE.md). Its backup, inspect and restore
 commands preserve the full database and restore only to a new chosen path.
 
+Before another import or complete backup, use
+[WORKSPACE_CAPACITY.md](WORKSPACE_CAPACITY.md) for a bounded, read-only storage
+pressure report that exposes no retained task or request content.
+
 ## Validate
 
 ```sh
@@ -210,3 +214,4 @@ Broad hosted regression jobs are disabled in the retained GitHub and CircleCI
 configuration under the owner's focused-validation policy. Source and historical
 courses remain available. Run only the specific relevant check for changed work;
 the publisher's focused command is documented in its guide.
+
