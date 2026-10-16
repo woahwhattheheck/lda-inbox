@@ -23,7 +23,9 @@ def load_json_bytes(data:bytes)->Any:
     try: text=data.decode('utf-8')
     except UnicodeDecodeError as e: raise EffectError('PAYLOAD_NOT_UTF8') from e
     try: value=json.loads(text,object_pairs_hook=_pairs_no_duplicates,parse_constant=_reject_constant)
-    except (json.JSONDecodeError,RecursionError) as e: raise EffectError('INVALID_JSON') from e
+    except EffectError:
+        raise
+    except (json.JSONDecodeError,RecursionError,ValueError) as e: raise EffectError('INVALID_JSON') from e
     _validate_json_graph(value); return value
 
 def _validate_json_graph(value:Any,*,depth:int=0,nodes:Optional[list[int]]=None)->None:
