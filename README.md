@@ -2,6 +2,21 @@
 
 Repository-backed task inbox for the LocalDeviceAgent phone agent.
 
+## Operator desk
+
+Open an inbox, review ownership, stage task handoffs and keep every local edition
+in a browser-based operator desk:
+
+```sh
+python inbox_operator.py --db /path/to/private/operator.sqlite
+```
+
+Use `--demo` with a new database for the authored local walkthrough. The desk
+includes search, state filters, claim/renew/release/completion controls,
+recoverable requests, and complete current/original/historical JSON downloads.
+It reuses the maintained protocol and stages local candidates for the existing
+publication workflow. See [OPERATOR_DESK.md](OPERATOR_DESK.md).
+
 ## Validate
 
 ```sh
