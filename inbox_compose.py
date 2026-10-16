@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
-import json
 from pathlib import Path
 import secrets
 import sqlite3
@@ -112,7 +110,7 @@ class ComposeHandler(Handler):
                 raise ValueError("A fixed request length is required")
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_REQUEST_BYTES:
-                raise ValueError("Request is empty or exceeds the authoring limit")
+                raise ValueError(Request is empty or exceeds the authoring limit")
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ValueError("Request ended before all bytes arrived")
