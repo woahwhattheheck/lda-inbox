@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LDA Inbox | Operator desk</title>
+<link rel="stylesheet" href="/operator.css"><script src="/operator.js" defer></script>
+</head>
+<body>
+<header><div><p class="eyebrow">LOCAL DEVICE AGENT / OPERATIONS</p><h1>Inbox operator desk</h1>
+<p class="muted">Review ownership. Stage a handoff. Retain every edition.</p></div><span class="badge">Local staging</span></header>
+<main>
+<div id="notice" role="status" aria-live="polite">Opening workspace…</div>
+<section class="panel topbar" aria-label="Workspace">
+<label class="grow">Workspace<select id="workspace"><option value="">No inbox selected</option></select></label>
+<button id="refresh">Refresh</button><button id="download" disabled>Download current JSON</button>
+<details class="import"><summary>Open inbox JSON</summary><div class="import-body">
+<p>Creates a separate workspace. Existing editions stay intact.</p>
+<label>Workspace name<input id="import-name" maxlength="160" placeholder="For example, demo handoff"></label>
+<label>Inbox file<input id="import-file" type="file" accept=".json,application/json"></label>
+<button id="import" class="primary">Open selected file</button></div></details>
+</section>
+<div id="pending" class="panel" hidden><strong>An operation needs recovery</strong><p id="pending-note"></p>
+<button id="recover" class="primary">Recover exact request</button></div>
+<section class="metrics" aria-label="Inbox summary">
+<div><strong id="count-all">0</strong><span>Total tasks</span></div>
+<div><strong id="count-ready">0</strong><span>Available / released</span></div>
+<div><strong id="count-live">0</strong><span>Active leases</span></div>
+<div><strong id="count-done">0</strong><span>Completed</span></div>
+</section>
+<div class="layout">
+<section class="panel task-panel"><div class="section-head"><h2>Tasks</h2><span id="revision" class="muted"></span></div>
+<div class="filters"><label class="grow">Search<input id="search" type="search" placeholder="Task, command or owner"></label>
+<label>State<select id="filter"><option value="all">All states</option><option value="available">Available</option><option value="leased">Active lease</option><option value="expired">Expired</option><option value="future">Future lease</option><option value="completed">Completed</option></select></label></div>
+<div id="tasks" class="tasks" aria-label="Tasks"></div>
+<p id="empty" class="empty">Open an inbox JSON file to begin.</p>
+</section>
+<section class="panel detail-panel" aria-label="Selected task">
+<h2 id="task-title">Select a task</h2><p id="task-state" class="muted">Its specification and current ownership appear here.</p>
+<div id="task-detail" hidden>
+<pre id="command" class="command"></pre><dl id="ownership"></dl>
+<details><summary>Complete task record</summary><pre id="task-json"></pre></details>
+<form id="operation"><h3>Stage a local transition</h3>
+<p class="muted">The retained protocol checks the selected edition, lease identity and generation. Clock: this host.</p>
+<fieldset id="operation-fields">
+<div class="form-grid"><label>Worker ID<input id="worker" value="operator-1" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._-]*"></label>
+<label>Lease ID<input id="lease" value="local-review-1" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._-]*"></label>
+<label>Action<select id="action"><option value="claim">Claim / reclaim</option><option value="renew">Renew lease</option><option value="release">Release for handoff</option><option value="complete">Record completion</option></select></label>
+<label id="seconds-label">Lease seconds<input id="seconds" type="number" min="1" max="3600" value="300" required></label></div>
+<label id="reason-label" hidden>Handoff note<textarea id="reason" rows="3" maxlength="2048"></textarea></label>
+<div id="completion-fields" hidden><label>Completion ID<input id="completion-id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._-]*"></label>
+<label>Result<textarea id="result" rows="4" placeholder="Describe the completed work"></textarea></label></div>
+<button id="stage" type="submit" class="primary">Stage transition</button>
+</fieldset></form>
+<p class="boundary">This desk saves local candidate editions. Publish and reread shared authority through the existing GitHub publisher before device execution.</p>
+</div></section>
+</div>
+<section class="panel history"><div class="section-head"><h2>Retained editions</h2><button id="original" disabled>Download imported original</button></div>
+<p class="muted">Every changed edition is preserved. Downloads do not replace the current inbox.</p>
+<div id="history"></div><button id="older" hidden>Show older editions</button>
+</section>
+<footer><span id="clock"></span><span id="digest"></span></footer>
+</main>
+</body></html>
