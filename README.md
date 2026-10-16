@@ -57,6 +57,23 @@ idempotency key/provider receipt or a human approval boundary.
 
 See [TASK_PROTOCOL.md](TASK_PROTOCOL.md) for the state machine and CLI examples.
 
+### Offline worker lifecycle plan
+
+Build a deterministic, redacted local scheduling view from one validated snapshot:
+
+```sh
+python inbox_worker_plan.py inbox.json \
+  --now 2026-10-16T01:00:00Z \
+  --worker-id phone-a \
+  --lease-id lease-a
+```
+
+The planner distinguishes claimable, exact-identity live, other-identity live,
+future, released, expired, completed, and attempt-ceiling states without
+copying commands, metadata, results, worker IDs, or lease IDs into its output.
+It performs no provider/device action and grants no lease authority. See
+[WORKER_PLAN.md](WORKER_PLAN.md).
+
 ### Deterministic offline walkthrough
 
 Run the maintained end-to-end example without a phone, provider, repository
