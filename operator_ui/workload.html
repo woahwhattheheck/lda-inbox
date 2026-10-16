@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inbox workload</title>
+<link rel="stylesheet" href="workload.css"><script src="workload.js" defer></script>
+</head>
+<body>
+<header><div><p class="eyebrow">LOCAL DEVICE AGENT / OPERATIONS</p><h1>Workload overview</h1>
+<p>Find available work, review ownership, and return to the original task.</p></div><a id="operator" class="button" href="/">Open operator desk</a></header>
+<main>
+<div id="notice" role="status" aria-live="polite">Open a saved observation or connect through the current launcher.</div>
+<section class="toolbar panel" aria-label="Data controls">
+<button id="refresh">Refresh live workspaces</button><button id="more" hidden>Load next 5</button><button id="cancel" hidden>Stop loading</button>
+<label class="file button">Open saved observation<input id="open" type="file" accept=".json,application/json"></label>
+<button id="save" disabled>Save complete observation</button>
+<button id="selection" disabled>Export filtered tasks</button>
+</section>
+<p id="coverage" class="muted">No workspaces loaded.</p>
+<section class="metrics" aria-label="Loaded workload">
+<button data-state="all"><strong id="total">0</strong><span>Loaded task records</span></button>
+<button data-state="available"><strong id="available">0</strong><span>Available / released</span></button>
+<button data-state="expired"><strong id="expired">0</strong><span>Expired leases</span></button>
+<button data-state="leased"><strong id="leased">0</strong><span>Active leases</span></button>
+<button data-state="soon"><strong id="soon">0</strong><span>Expire within 15 min</span></button>
+<button data-state="completed"><strong id="completed">0</strong><span>Completed</span></button>
+</section>
+<details class="panel" id="filter-panel" open><summary id="filter-summary">Search and filters</summary>
+<div class="filters" aria-label="Workload filters">
+<label class="grow">Search<input id="search" type="search" placeholder="Task, command, workspace or worker"></label>
+<label>State<select id="state"><option value="all">All states</option><option value="available">Available / released</option><option value="expired">Expired lease</option><option value="leased">Active lease</option><option value="soon">Expires within 15 min</option><option value="future">Future</option><option value="completed">Completed</option><option value="invalid">Unreadable timing</option></select></label>
+<label>Workspace<select id="workspace"><option value="">All loaded workspaces</option></select></label>
+<label>Worker<select id="worker"><option value="">All workers</option></select></label>
+<label>Order<select id="sort"><option value="attention">Available and expired first</option><option value="oldest">Oldest created first</option><option value="expiry">Nearest lease expiry</option><option value="recent">Recently updated workspace</option><option value="name">Task ID</option></select></label>
+<button id="reset">Reset filters</button>
+</div></details>
+<details class="panel"><summary>Worker activity and workspace copies</summary>
+<p class="muted">Counts describe loaded local workspaces, which may include copies of the same task. They are not a fleet-wide capacity count.</p>
+<p id="duplicates"></p><div id="workers" class="worker-grid"></div></details>
+<section aria-label="Task results"><div class="section-title"><h2>Tasks</h2><span id="matched" class="muted">0 matching</span></div>
+<div id="tasks"></div><p id="empty" class="panel empty">Open a saved observation or refresh live workspaces to begin.</p>
+<button id="show-more" hidden>Show next 50 matching tasks</button></section>
+<details class="panel"><summary>Loaded workspace editions</summary><div id="editions"></div></details>
+<footer id="footnote">Each workspace retains its source identity, saved edition, document digest and observation time. Live task links refresh the original operator before any change.</footer>
+</main>
+</body>
+</html>
