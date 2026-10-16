@@ -22,6 +22,10 @@ action. It records one logical effect, publishes a private generation-bound
 token durably, and refuses the `PREPARED -> DISPATCHED` transition unless the
 same lease generation is still live in the repository's canonical `inbox.json`.
 
+Payload and token JSON parsing also fails closed on syntax, nesting, and runtime
+integer-digit limits. Duplicate keys and non-finite constants retain their
+specific diagnostics; no parser-limit `ValueError` escapes the effect boundary.
+
 ## Ledger database custody
 
 The SQLite ledger is persistent effect authority and therefore has the same
