@@ -73,7 +73,13 @@ def decode_json(raw: bytes) -> dict[str, Any]:
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_object,
                            parse_constant=_nonfinite)
-    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+    except InboxGitHubError:
+        # Preserve duplicate-key and non-finite diagnostics from our hooks.
+        raise
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        # Runtime parser limits (for example excessive integer digits) raise
+        # plain ValueError, not JSONDecodeError. Keep them inside the transport
+        # error boundary so an uncertain commit still receives readback.
         raise InboxGitHubError("invalid UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise InboxGitHubError("expected a JSON object")

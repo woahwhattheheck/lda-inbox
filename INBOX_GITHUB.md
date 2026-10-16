@@ -134,6 +134,11 @@ change after the read returns. A rejected read never reaches request inspection
 or publication; retain the original file and reconcile its custody before retrying.
 Redirects are not followed with credentials. HTTP 401, 403 and 429 end the
 operation without retries; request ID and Retry-After are included when returned.
+Malformed provider JSON, including runtime parser-limit failures, remains a
+provider error. If a commit response cannot be decoded, the original operation
+continues to its current-branch readback instead of assuming that no write occurred.
+Specific duplicate-key and nonfinite-value diagnostics remain intact for local
+request reads.
 The client does not modify repository permissions or workflow settings.
 
 ## Results
