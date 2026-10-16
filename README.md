@@ -57,6 +57,21 @@ idempotency key/provider receipt or a human approval boundary.
 
 See [TASK_PROTOCOL.md](TASK_PROTOCOL.md) for the state machine and CLI examples.
 
+### Offline retained-history audit
+
+Audit an ordered sequence of retained inbox snapshots without granting task or
+lease authority:
+
+```sh
+python inbox_history_audit.py snapshot-001.json snapshot-002.json
+```
+
+The redacted report detects root-metadata drift, task/specification rollback, completion rewriting,
+lease-generation rollback/skip, within-generation authority changes, shortened
+renewals, and invalid release/reclaim timing. It exposes only document/task
+digests, attempts, transition kinds, and counts. See
+[HISTORY_AUDIT.md](HISTORY_AUDIT.md).
+
 ### Offline worker lifecycle plan
 
 Build a deterministic, redacted local scheduling view from one validated snapshot:
