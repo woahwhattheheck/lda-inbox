@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LDA Inbox | New inbox</title>
+<link rel="stylesheet" href="/compose.css"><script src="/compose.js" defer></script>
+</head>
+<body>
+<header>
+  <div><p class="eyebrow">LOCAL DEVICE AGENT / OPERATIONS</p><h1>New inbox authoring</h1>
+  <p class="muted">Build a pending task set, validate it with the maintained protocol, then open it in the retained desk.</p></div>
+  <nav><a href="/">Operator desk</a><span class="badge">Local authoring</span></nav>
+</header>
+<main>
+<div id="notice" role="status" aria-live="polite">Opening authoring workspace…</div>
+<section class="panel controls" aria-label="Inbox controls">
+  <div class="fields">
+    <label>Workspace name<input id="workspace-label" maxlength="160" placeholder="Operations handoff"></label>
+    <label>Inbox label<input id="document-label" maxlength="160" placeholder="Operations handoff"></label>
+  </div>
+  <div class="actions">
+    <button id="add" class="primary">Add task</button>
+    <label class="file-button">Open pending inbox<input id="open-file" type="file" accept=".json,application/json"></label>
+    <button id="download">Download JSON</button>
+    <button id="save" class="primary">Save and open workspace</button>
+    <button id="recover" hidden>Recover exact save</button>
+    <button id="clear">Clear draft</button>
+  </div>
+</section>
+<section class="metrics" aria-label="Draft summary">
+  <div><strong id="task-count">0</strong><span>Pending tasks</span></div>
+  <div><strong id="byte-count">0</strong><span>Canonical bytes</span></div>
+  <div><strong id="validation">Checking</strong><span>Protocol status</span></div>
+</section>
+<section class="panel">
+  <div class="section-head"><div><h2>Task order</h2><p class="muted">Order is retained in the exported inbox. Every task is authored as pending <code>run_task</code>.</p></div></div>
+  <div id="tasks" class="tasks"></div>
+  <p id="empty" class="empty">Add a task to begin.</p>
+</section>
+<section class="panel boundary">
+  <strong>Authority boundary</strong>
+  <p>This page authors and retains a local inbox workspace. Shared authority still requires the existing exact-ref publisher and reread before any device execution.</p>
+</section>
+<footer><span id="draft-state">Draft not yet retained</span><span id="digest"></span></footer>
+</main>
+</body></html>
